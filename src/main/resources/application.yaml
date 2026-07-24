@@ -1,0 +1,39 @@
+spring:
+  application:
+    name: paymentModule
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+    username: payment
+    password: payment
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        format_sql: true
+        show_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:sql/schema.sql
+
+  docker:
+    compose:
+      enabled: true
+      file: docker_compose.yml
+      lifecycle-management: start-and-stop
+
+server:
+  port: 8080
+
+jwt:
+  secret-key: QzQlU1lAVkpcXiFaSlxRND5cQkQyRjdGVDZIR0QjPWRFV0ZeWCJdUVZaSCk1TltBXF4=
+  token:
+    access: 86400000
+    refresh: 864000000
