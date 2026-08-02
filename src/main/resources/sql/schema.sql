@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS payment (
-                                       id BIGINT NOT NULL AUTO_INCREMENT COMMENT '결제 PK',
+                                       id BIGINT NOT NULL COMMENT '결제 PK',
                                        userId BIGINT NOT NULL COMMENT '결제 대상 사용자 PK',
                                        loginId VARCHAR(255) NOT NULL COMMENT '결제 당시 사용자의 로그인 식별자',
     productId BIGINT NOT NULL COMMENT '결제 대상 상품 PK',
@@ -16,8 +16,8 @@ CREATE TABLE IF NOT EXISTS payment (
     requestedAt DATETIME(6) NULL COMMENT 'PG사 결제 요청 일시',
     approvedAt DATETIME(6) NULL COMMENT '결제 승인 완료 일시',
     cancelledAt DATETIME(6) NULL COMMENT '결제 전액 취소 완료 일시',
-    createdBy BIGINT NOT NULL COMMENT '결제 데이터를 생성한 사용자 또는 시스템 PK',
-    updatedBy BIGINT NOT NULL COMMENT '결제 데이터를 마지막으로 수정한 사용자 또는 시스템 PK',
+    createdBy VARCHAR(255) NOT NULL COMMENT '등록한 사용자 로그인 ID',
+    updatedBy VARCHAR(255) NOT NULL COMMENT '수정한 사용자 로그인 ID',
     createdAt DATETIME(6) NOT NULL COMMENT '결제 데이터 생성 일시',
     updatedAt DATETIME(6) NOT NULL COMMENT '결제 데이터 최종 수정 일시',
     PRIMARY KEY (id),
@@ -31,8 +31,8 @@ CREATE TABLE IF NOT EXISTS payment (
     CONSTRAINT ck_payment_cancelledAmount CHECK (cancelledAmount >= 0 AND cancelledAmount <= amount)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='결제 현재 상태 및 결제 결과 관리';
 
-CREATE TABLE IF NOT EXISTS paymentHistory (
-                                              id BIGINT NOT NULL AUTO_INCREMENT COMMENT '결제 이력 PK',
+CREATE TABLE IF NOT EXISTS payment_history (
+                                              id BIGINT NOT NULL COMMENT '결제 이력 PK',
                                               paymentId BIGINT NOT NULL COMMENT '결제 PK 참조값이며 DB 외래키 제약은 사용하지 않음',
                                               userId BIGINT NOT NULL COMMENT '결제 대상 사용자 PK',
                                               loginId VARCHAR(255) NOT NULL COMMENT '이력 생성 당시 사용자의 로그인 식별자',
@@ -44,10 +44,8 @@ CREATE TABLE IF NOT EXISTS paymentHistory (
     providerTransactionId VARCHAR(255) NULL COMMENT 'PG사에서 발급한 승인 또는 취소 거래 식별자',
     resultCode VARCHAR(100) NULL COMMENT 'PG사 처리 결과 코드',
     resultMessage VARCHAR(500) NULL COMMENT 'PG사 처리 결과 메시지',
-    createdBy BIGINT NOT NULL COMMENT '결제 이력을 생성한 사용자 또는 시스템 PK',
-    updatedBy BIGINT NOT NULL COMMENT '결제 이력을 마지막으로 수정한 사용자 또는 시스템 PK',
+    createdBy VARCHAR(255) NOT NULL COMMENT '등록한 사용자 로그인 ID',
     createdAt DATETIME(6) NOT NULL COMMENT '결제 이력 생성 일시',
-    updatedAt DATETIME(6) NOT NULL COMMENT '결제 이력 최종 수정 일시',
     PRIMARY KEY (id),
     KEY idx_paymentHistory_paymentId (paymentId),
     KEY idx_paymentHistory_userId (userId),
@@ -57,8 +55,8 @@ CREATE TABLE IF NOT EXISTS paymentHistory (
     CONSTRAINT ck_paymentHistory_cumulativeCancelledAmount CHECK (cumulativeCancelledAmount IS NULL OR cumulativeCancelledAmount >= 0)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='결제 승인, 실패, 취소 및 상태 변경 이력';
 
-CREATE TABLE IF NOT EXISTS paymentApiLog (
-                                             id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'PG사 API 통신 로그 PK',
+CREATE TABLE IF NOT EXISTS payment_api_log (
+                                             id BIGINT NOT NULL COMMENT 'PG사 API 통신 로그 PK',
                                              paymentId BIGINT NOT NULL COMMENT '결제 PK 참조값이며 DB 외래키 제약은 사용하지 않음',
                                              userId BIGINT NOT NULL COMMENT '결제 대상 사용자 PK',
                                              loginId VARCHAR(255) NOT NULL COMMENT 'API 호출 당시 사용자의 로그인 식별자',
@@ -78,10 +76,8 @@ CREATE TABLE IF NOT EXISTS paymentApiLog (
     errorMessage VARCHAR(1000) NULL COMMENT 'API 호출 중 발생한 내부 예외 또는 오류 메시지',
     requestedAt DATETIME(6) NOT NULL COMMENT 'PG사 API 요청 시작 일시',
     respondedAt DATETIME(6) NULL COMMENT 'PG사 API 응답 수신 일시',
-    createdBy BIGINT NOT NULL COMMENT 'API 로그를 생성한 사용자 또는 시스템 PK',
-    updatedBy BIGINT NOT NULL COMMENT 'API 로그를 마지막으로 수정한 사용자 또는 시스템 PK',
+    createdBy VARCHAR(255) NOT NULL COMMENT '등록한 사용자 로그인 ID',
     createdAt DATETIME(6) NOT NULL COMMENT 'API 로그 생성 일시',
-    updatedAt DATETIME(6) NOT NULL COMMENT 'API 로그 최종 수정 일시',
     PRIMARY KEY (id),
     KEY idx_paymentApiLog_paymentId (paymentId),
     KEY idx_paymentApiLog_userId (userId),

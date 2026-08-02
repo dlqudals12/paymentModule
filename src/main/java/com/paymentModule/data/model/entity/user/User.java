@@ -2,6 +2,7 @@ package com.paymentModule.data.model.entity.user;
 
 import com.paymentModule.data.enums.UserRoleType;
 import com.paymentModule.data.model.entity.BaseEntity;
+import io.hypersistence.utils.hibernate.id.Tsid;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -14,7 +15,7 @@ import lombok.*;
 public class User extends BaseEntity {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Tsid
     @Column(nullable = false)
     private Long id;
 

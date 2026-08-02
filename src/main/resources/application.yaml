@@ -26,7 +26,6 @@ spring:
   docker:
     compose:
       enabled: true
-      file: docker_compose.yml
       lifecycle-management: start-and-stop
 
 server:

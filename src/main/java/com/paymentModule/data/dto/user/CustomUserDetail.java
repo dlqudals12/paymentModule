@@ -5,10 +5,10 @@ import com.paymentModule.data.model.entity.user.User;
 import io.jsonwebtoken.Claims;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import org.apache.commons.collections4.MapUtils;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.util.StringUtils;
 
 import java.util.Collection;
 import java.util.List;
@@ -49,12 +49,14 @@ public class CustomUserDetail implements UserDetails {
     }
 
     public CustomUserDetail(Claims claims) {
-        String joinRoles = MapUtils.getString(claims, "roles", "");
+        String joinedRoles = claims.get("roles", String.class);
 
-        this.id = MapUtils.getLong(claims, "id");
-        this.userId = MapUtils.getString(claims, "userId");
-        this.email = MapUtils.getString(claims, "email");
-        this.name = MapUtils.getString(claims, "name");
-        this.roles = Stream.of(joinRoles.split(",")).map(UserRoleType::valueOf).toList();
+        this.id = claims.get("id", Long.class);
+        this.userId = claims.get("userId", String.class);
+        this.email = claims.get("email", String.class);
+        this.name = claims.get("name", String.class);
+        this.roles = StringUtils.hasText(joinedRoles)
+                ? Stream.of(joinedRoles.split(",")).map(UserRoleType::valueOf).toList()
+                : List.of();
     }
 }
