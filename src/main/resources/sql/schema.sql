@@ -1,3 +1,18 @@
+CREATE TABLE IF NOT EXISTS user (
+    id BIGINT NOT NULL COMMENT '사용자 PK',
+    userId VARCHAR(20) NOT NULL COMMENT '사용자 로그인 ID',
+    password VARCHAR(255) NOT NULL COMMENT '암호화된 비밀번호',
+    email VARCHAR(50) NOT NULL COMMENT '이메일',
+    userName VARCHAR(20) NOT NULL COMMENT '사용자 이름',
+    role VARCHAR(10) NOT NULL COMMENT '사용자 권한: USER, ADMIN',
+    createdBy VARCHAR(255) NOT NULL COMMENT '등록한 사용자 로그인 ID',
+    updatedBy VARCHAR(255) NOT NULL COMMENT '수정한 사용자 로그인 ID',
+    createdAt DATETIME(6) NOT NULL COMMENT '사용자 등록 일시',
+    updatedAt DATETIME(6) NOT NULL COMMENT '사용자 수정 일시',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_user_userId (userId)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='사용자 정보';
+
 CREATE TABLE IF NOT EXISTS payment (
                                        id BIGINT NOT NULL COMMENT '결제 PK',
                                        userId BIGINT NOT NULL COMMENT '결제 대상 사용자 PK',
