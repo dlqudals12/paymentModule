@@ -12,6 +12,9 @@ public class PaymentRequest {
     private Long productId;
 
     @NotNull
+    private String orderId;
+
+    @NotNull
     private PaymentMethod paymentMethod;
 
     @NotNull
@@ -20,4 +23,5 @@ public class PaymentRequest {
     @NotNull
     @Positive
     private Long amount;
+    
 }
