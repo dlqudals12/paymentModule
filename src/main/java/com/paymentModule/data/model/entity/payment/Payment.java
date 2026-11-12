@@ -16,7 +16,8 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "payment", uniqueConstraints = {
         @UniqueConstraint(name = "uk_payment_idempotencyKey", columnNames = "idempotencyKey"),
-        @UniqueConstraint(name = "uk_payment_provider_transactionId", columnNames = {"provider", "transactionId"})
+        @UniqueConstraint(name = "uk_payment_provider_transactionId", columnNames = {"provider", "transactionId"}),
+        @UniqueConstraint(name = "uk_payment_provider_orderId", columnNames = {"provider", "orderId"})
 })
 @Comment("결제 현재 상태 및 결제 결과 관리")
 @Getter
@@ -44,9 +45,9 @@ public class Payment extends BaseEntity {
     @Comment("결제 당시 사용자의 로그인 식별자")
     private String loginId;
 
-    @Column(name = "productId", nullable = false)
-    @Comment("결제 대상 상품 PK")
-    private Long productId;
+    @Column(name = "orderId", nullable = false, length = 64)
+    @Comment("결제 요청과 승인에 사용하는 주문 식별자")
+    private String orderId;
 
     @Column(name = "transactionId", length = 255)
     @Comment("외부 PG사에서 발급한 결제 식별자")
@@ -104,4 +105,42 @@ public class Payment extends BaseEntity {
     @Column(name = "cancelledAt")
     @Comment("결제 전액 취소 완료 일시")
     private LocalDateTime cancelledAt;
+
+    /**
+     * 승인 요청을 시작했음을 기록한다. 네트워크 호출 전 별도 트랜잭션에서 확정한다.
+     */
+    public void process() {
+        this.status = PaymentStatus.PROCESSING;
+        this.requestedAt = LocalDateTime.now();
+    }
+
+    /**
+     * 토스 승인 결과와 결제 식별자를 저장한다.
+     */
+    public void approve(String transactionId, PaymentMethod paymentMethod, LocalDateTime approvedAt) {
+        this.status = PaymentStatus.SUCCESS;
+        this.transactionId = transactionId;
+        this.paymentMethod = paymentMethod;
+        this.approvedAt = approvedAt;
+        this.failureCode = null;
+        this.failureMessage = null;
+    }
+
+    /**
+     * 가상계좌 입금 대기처럼 인증은 되었지만 결제가 아직 완료되지 않은 상태를 기록한다.
+     */
+    public void pending(String transactionId, PaymentMethod paymentMethod) {
+        this.status = PaymentStatus.PROCESSING;
+        this.transactionId = transactionId;
+        this.paymentMethod = paymentMethod;
+    }
+
+    /**
+     * 승인 실패 또는 결과 미확인 상태를 저장한다. 통신 오류는 실패로 단정하지 않는다.
+     */
+    public void fail(PaymentStatus status, String code, String message) {
+        this.status = status;
+        this.failureCode = code;
+        this.failureMessage = message;
+    }
 }

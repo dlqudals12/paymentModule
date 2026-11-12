@@ -8,7 +8,6 @@ import io.hypersistence.utils.hibernate.id.Tsid;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.Comment;
-import org.springframework.http.HttpMethod;
 
 import java.time.LocalDateTime;
 
@@ -63,10 +62,9 @@ public class PaymentApiLog extends CreatedBaseEntity {
     @Comment("PG사 API 호출 유형")
     private PaymentApiType apiType;
 
-    @Enumerated(EnumType.STRING)
     @Column(name = "httpMethod", nullable = false, length = 10)
     @Comment("PG사 API 요청 HTTP 메서드")
-    private HttpMethod httpMethod;
+    private String httpMethod;
 
     @Column(name = "requestUrl", nullable = false, length = 1000)
     @Comment("호출한 PG사 API 주소")
