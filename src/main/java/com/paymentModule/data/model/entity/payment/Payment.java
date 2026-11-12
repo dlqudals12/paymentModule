@@ -17,7 +17,7 @@ import java.time.LocalDateTime;
 @Table(name = "payment", uniqueConstraints = {
         @UniqueConstraint(name = "uk_payment_idempotencyKey", columnNames = "idempotencyKey"),
         @UniqueConstraint(name = "uk_payment_provider_transactionId", columnNames = {"provider", "transactionId"}),
-        @UniqueConstraint(name = "uk_payment_provider_orderId", columnNames = {"provider", "orderId"})
+        @UniqueConstraint(name = "uk_payment_provider_activeOrderId", columnNames = {"provider", "activeOrderId"})
 })
 @Comment("결제 현재 상태 및 결제 결과 관리")
 @Getter
@@ -49,6 +49,10 @@ public class Payment extends BaseEntity {
     @Comment("결제 요청과 승인에 사용하는 주문 식별자")
     private String orderId;
 
+    @Column(name = "activeOrderId", length = 64)
+    @Comment("진행 가능한 결제 시도의 주문 식별자. 실패한 시도는 비워 새 시도를 허용한다.")
+    private String activeOrderId;
+
     @Column(name = "transactionId", length = 255)
     @Comment("외부 PG사에서 발급한 결제 식별자")
     private String transactionId;
@@ -74,7 +78,7 @@ public class Payment extends BaseEntity {
     private PaymentStatus status;
 
     @Column(name = "amount", nullable = false)
-    @Comment("최초 결제 요청 금액, 원 단위")
+    @Comment("결제 준비 단계에 저장한 금액, 원 단위")
     private Long amount;
 
     @Builder.Default
@@ -105,6 +109,13 @@ public class Payment extends BaseEntity {
     @Column(name = "cancelledAt")
     @Comment("결제 전액 취소 완료 일시")
     private LocalDateTime cancelledAt;
+
+    /**
+     * SDK 실행 전 같은 주문을 다시 준비하면 서버에서 확인한 금액으로 갱신한다.
+     */
+    public void updateReadyAmount(Long amount) {
+        this.amount = amount;
+    }
 
     /**
      * 승인 요청을 시작했음을 기록한다. 네트워크 호출 전 별도 트랜잭션에서 확정한다.
@@ -142,5 +153,9 @@ public class Payment extends BaseEntity {
         this.status = status;
         this.failureCode = code;
         this.failureMessage = message;
+
+        if (status == PaymentStatus.FAILED) {
+            this.activeOrderId = null;
+        }
     }
 }

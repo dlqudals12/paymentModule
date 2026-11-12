@@ -34,6 +34,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Set;
@@ -42,6 +43,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -132,7 +134,11 @@ class PaymentFlowIntegrationTest {
         TossApiResponse approved = tossResponse(orderId, "payment_success_001", 1500L,
                 TossPaymentStatus.DONE);
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
-                .thenReturn(TossApiResult.success(200, approved));
+                .thenAnswer(invocation -> {
+                    //외부 PG 호출 중에는 DB 트랜잭션을 유지하지 않는다.
+                    assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+                    return TossApiResult.success(200, approved);
+                });
 
         PaymentRequest request = paymentRequest(orderId, "payment_success_001", 1500L);
         PaymentResponse completed = paymentController.payment(request).getData();
@@ -170,7 +176,51 @@ class PaymentFlowIntegrationTest {
         assertEquals(1, paymentApiLogRepository.count());
         assertEquals(1, applicationEvents.stream(PaymentCompletedEvent.class).count());
 
+        assertThrows(ResponseStatusException.class,
+                () -> paymentController.ready(readyRequest(orderId, 1500L)));
+
         verify(tossPaymentApi).confirm(any(TossConfirmRequest.class), anyString());
+    }
+
+    /**
+     * 새로고침으로 같은 주문을 다시 준비하면 결제 시도를 재사용하고 금액만 갱신한다.
+     */
+    @Test
+    void repeatedReadyUpdatesAmount() {
+        PaymentResponse first = paymentController.ready(
+                readyRequest("order_refresh_001", 1500L)).getData();
+        PaymentResponse repeated = paymentController.ready(
+                readyRequest("order_refresh_001", 2000L)).getData();
+
+        assertEquals(first.getPaymentId(), repeated.getPaymentId());
+        assertEquals(PaymentStatus.READY, repeated.getStatus());
+        assertEquals(2000L, repeated.getAmount());
+        assertEquals(1, paymentRepository.count());
+        assertEquals(1, paymentHistoryRepository.count());
+        verifyNoInteractions(tossPaymentApi);
+    }
+
+    /**
+     * 실패한 결제 행은 그대로 두고 같은 주문의 새 준비 시도를 생성한다.
+     */
+    @Test
+    void failedPaymentAllowsNewReady() {
+        String orderId = "order_retry_001";
+        PaymentResponse first = paymentController.ready(readyRequest(orderId, 1500L)).getData();
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.failure(400, "INVALID_REQUEST", "승인 거절"));
+
+        assertThrows(ResponseStatusException.class,
+                () -> paymentController.payment(paymentRequest(orderId, "payment_retry_001", 1500L)));
+
+        PaymentResponse repeated = paymentController.ready(readyRequest(orderId, 1500L)).getData();
+
+        assertNotEquals(first.getPaymentId(), repeated.getPaymentId());
+        assertEquals(PaymentStatus.FAILED,
+                paymentRepository.findById(first.getPaymentId()).orElseThrow().getStatus());
+        assertEquals(PaymentStatus.READY,
+                paymentRepository.findById(repeated.getPaymentId()).orElseThrow().getStatus());
+        assertEquals(2, paymentRepository.count());
     }
 
     /**
@@ -259,6 +309,9 @@ class PaymentFlowIntegrationTest {
                 .anyMatch(history -> history.getHistoryType() == PaymentHistoryType.PAYMENT_PENDING));
         assertEquals(1, paymentApiLogRepository.count());
         assertEquals(0, applicationEvents.stream(PaymentCompletedEvent.class).count());
+
+        assertThrows(ResponseStatusException.class,
+                () -> paymentController.ready(readyRequest("order_pending_001", 1500L)));
     }
 
     /**
