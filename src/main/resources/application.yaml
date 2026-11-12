@@ -36,3 +36,16 @@ jwt:
   token:
     access: 86400000
     refresh: 864000000
+
+payments:
+  toss:
+    client-key: ${TOSS_CLIENT_KEY:}
+    secret-key: ${TOSS_SECRET_KEY:}
+    security-key: ${TOSS_SECURITY_KEY:}
+    base-url: https://api.tosspayments.com
+    path:
+      confirm: /v1/payments/confirm
+      payment-key: /v1/payments/{paymentKey}
+      order-id: /v1/payments/orders/{orderId}
+      cancel: /v1/payments/{paymentKey}/cancel
+      virtual-accounts: /v1/virtual-accounts
