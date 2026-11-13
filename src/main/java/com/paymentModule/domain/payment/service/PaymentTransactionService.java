@@ -13,6 +13,7 @@ import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.domain.payment.dto.response.PaymentResponse;
 import com.paymentModule.domain.payment.processor.PaymentProcessResult;
 import com.paymentModule.domain.payment.processor.PaymentProcessor;
+import com.paymentModule.global.exception.PaymentException;
 import com.paymentModule.global.util.AuthUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -136,97 +137,55 @@ public class PaymentTransactionService {
     }
 
     /**
-     * PG 승인 결과와 이력, 통신 로그 저장
+     * PG 승인·조회 결과를 결제 상태, 이력, 통신 로그에 저장한다.
      */
     @Transactional
-    public PaymentResponse updateResult(Payment previous, PaymentProcessor processor,
-                                        PaymentProcessResult result, PaymentApiType apiType,
-                                        LocalDateTime requestedAt, long durationMs) {
+    public PaymentResponse writeResult(Payment previous, PaymentProcessor processor, PaymentProcessResult result,
+                                       PaymentApiType apiType, LocalDateTime requestedAt,
+                                       long durationMs, Exception exception, boolean updateStatus) {
         CustomUserDetail user = AuthUtil.authentication();
 
-        //승인 요청 전 트랜잭션의 엔티티 대신 현재 결제 행을 잠그고 다시 조회
+        //PG 호출 전 엔티티 대신 현재 결제 행을 잠그고 다시 조회한다.
         Payment current = payment(previous.getProvider(), previous.getOrderId(), user.getId());
 
-        if (current.getPaymentStatus() == PaymentStatus.SUCCESS
+        if (updateStatus && current.getPaymentStatus() == PaymentStatus.SUCCESS
                 && result.getStatus() == PaymentStatus.SUCCESS
                 && Objects.equals(current.getTransactionId(), result.getTransactionId())) {
-            //동시에 진행한 최초 승인 요청이 먼저 확정했으면 동일 결과를 그대로 반환한다.
-            saveApiLog(current, processor, result, apiType, requestedAt, durationMs, null);
+            //다른 요청이 같은 결제 키의 성공을 먼저 확정했다면 이력은 중복 생성하지 않는다.
+            saveApiLog(current, processor, result, apiType, requestedAt, durationMs, exception);
             return PaymentResponse.of(current);
         }
 
-        //다른 요청이 결제 상태를 바꿨으면 승인 결과로 덮어쓰지 않음
-        PaymentStatus previousStatus = current.getPaymentStatus();
-        if (previousStatus != PaymentStatus.PROCESSING && previousStatus != PaymentStatus.UNKNOWN) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 상태가 변경되었습니다.");
+        if (updateStatus) {
+            PaymentStatus previousStatus = current.getPaymentStatus();
+            if (previousStatus != PaymentStatus.PROCESSING && previousStatus != PaymentStatus.UNKNOWN) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 상태가 변경되었습니다.");
+            }
+
+            //정상 승인, 입금 대기, 실패 확정은 각 상태에 맞게 결제와 이력을 함께 변경한다.
+            switch (result.getStatus()) {
+                case SUCCESS -> {
+                    current.approve(result.getTransactionId(), result.getPaymentMethod(), result.getApprovedAt());
+                    saveHistory(current, PaymentHistoryType.PAYMENT_SUCCEEDED,
+                            previousStatus, result.getCode(), result.getMessage());
+                }
+                case PROCESSING -> {
+                    current.pending(result.getTransactionId(), result.getPaymentMethod());
+                    saveHistory(current, PaymentHistoryType.PAYMENT_PENDING,
+                            previousStatus, result.getCode(), result.getMessage());
+                }
+                case FAILED, UNKNOWN, PARTIAL_CANCELLED, CANCELLED -> {
+                    current.fail(result.getStatus(), limit(result.getCode(), 100), limit(result.getMessage(), 500));
+                    saveHistory(current, result.getStatus().getFailureHistoryType(),
+                            previousStatus, result.getCode(), result.getMessage());
+                }
+                default -> throw new ResponseStatusException(HttpStatus.CONFLICT, "저장할 수 없는 결제 상태입니다.");
+            }
         }
 
-        //입금 대기 등 아직 완료되지 않은 결제는 처리 중 상태로 유지
-        if (result.getStatus() == PaymentStatus.PROCESSING) {
-            current.pending(result.getTransactionId(), result.getPaymentMethod());
-
-            //결제 대기 상태 변경 이력 저장
-            saveHistory(current, PaymentHistoryType.PAYMENT_PENDING,
-                    previousStatus, result.getCode(), result.getMessage());
-
-            //PG 승인 요청과 대기 응답의 통신 기록 저장
-            saveApiLog(current, processor, result, apiType, requestedAt, durationMs, null);
-
-            return PaymentResponse.of(current);
-        }
-
-        //승인 성공 결과 저장
-        current.approve(result.getTransactionId(), result.getPaymentMethod(), result.getApprovedAt());
-
-        //결제 성공 상태 변경 이력 저장
-        saveHistory(current, PaymentHistoryType.PAYMENT_SUCCEEDED,
-                previousStatus, result.getCode(), result.getMessage());
-
-        //PG 승인 요청과 성공 응답의 통신 기록 저장
-        saveApiLog(current, processor, result, apiType, requestedAt, durationMs, null);
-
+        //조회 결과가 불확실한 경우에도 실제 PG 통신 기록은 남긴다.
+        saveApiLog(current, processor, result, apiType, requestedAt, durationMs, exception);
         return PaymentResponse.of(current);
-    }
-
-    /**
-     * PG 실패 또는 결과 미확인 상태와 통신 로그 저장
-     */
-    @Transactional
-    public void updateFailure(Payment previous, PaymentProcessor processor, PaymentProcessResult result,
-                              PaymentApiType apiType, LocalDateTime requestedAt,
-                              long durationMs, RuntimeException exception) {
-        CustomUserDetail user = AuthUtil.authentication();
-
-        //PG 호출 전 저장한 결제를 다시 잠그고 조회해 다른 요청의 상태 변경을 확인한다.
-        Payment payment = payment(previous.getProvider(), previous.getOrderId(), user.getId());
-
-        PaymentStatus previousStatus = payment.getPaymentStatus();
-        if (previousStatus != PaymentStatus.PROCESSING && previousStatus != PaymentStatus.UNKNOWN) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 상태가 변경되었습니다.");
-        }
-
-        //PG가 반환한 실패 또는 결과 미확인 상태와 오류 내용을 결제에 남긴다.
-        payment.fail(result.getStatus(), limit(result.getCode(), 100), limit(result.getMessage(), 500));
-
-        //이전 상태에서 실패 또는 결과 미확인 상태로 바뀐 이력을 저장한다.
-        saveHistory(payment, result.getStatus().getFailureHistoryType(),
-                previousStatus, result.getCode(), result.getMessage());
-
-        //토스 HTTP 응답 여부와 요청 소요 시간을 별도 API 로그에 기록한다.
-        saveApiLog(payment, processor, result, apiType, requestedAt, durationMs, exception);
-    }
-
-    /**
-     * 조회로 승인 결과를 확정할 수 없으면 결제 상태를 유지하고 조회 통신만 기록한다.
-     */
-    @Transactional
-    public void recordLookup(Payment previous, PaymentProcessor processor, PaymentProcessResult result,
-                             LocalDateTime requestedAt, long durationMs, RuntimeException exception) {
-        CustomUserDetail user = AuthUtil.authentication();
-        Payment current = payment(previous.getProvider(), previous.getOrderId(), user.getId());
-
-        saveApiLog(current, processor, result, PaymentApiType.PAYMENT_LOOKUP,
-                requestedAt, durationMs, exception);
     }
 
     /**
@@ -329,7 +288,7 @@ public class PaymentTransactionService {
      */
     private void saveApiLog(Payment payment, PaymentProcessor processor, PaymentProcessResult result,
                             PaymentApiType apiType, LocalDateTime requestedAt,
-                            long durationMs, RuntimeException exception) {
+                            long durationMs, Exception exception) {
         //인증 헤더와 결제 본문에는 민감정보가 있으므로 로그 테이블에 저장하지 않는다.
         paymentApiLogRepository.save(PaymentApiLog.builder()
                 .paymentId(payment.getId())
@@ -348,8 +307,9 @@ public class PaymentTransactionService {
                         && (result.getStatus() == PaymentStatus.SUCCESS
                         || result.getStatus() == PaymentStatus.PROCESSING))
                 .durationMs(durationMs)
-                .errorType(exception == null ? limit(result.getCode(), 100)
-                        : exception.getClass().getSimpleName())
+                //PG가 제공한 오류 코드는 보존하고, 그 밖의 예외는 실제 예외 유형을 기록한다.
+                .errorType(exception == null || exception instanceof PaymentException
+                        ? limit(result.getCode(), 100) : exception.getClass().getSimpleName())
                 .errorMessage(limit(result.getMessage(), 1000))
                 .requestedAt(requestedAt)
                 .respondedAt(result.getHttpStatus() == null ? null : LocalDateTime.now())

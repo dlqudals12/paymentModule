@@ -21,6 +21,7 @@ import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.domain.payment.dto.response.PaymentResponse;
 import com.paymentModule.domain.payment.service.PaymentTransactionService;
 import com.paymentModule.event.payments.PaymentCompletedEvent;
+import com.paymentModule.global.exception.PaymentException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -227,7 +228,7 @@ class PaymentFlowIntegrationTest {
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.failure(400, "INVALID_REQUEST", "승인 거절"));
 
-        assertThrows(ResponseStatusException.class,
+        assertThrows(PaymentException.class,
                 () -> paymentController.payment(paymentRequest(orderId, "payment_retry_001", READY_AMOUNT)));
 
         PaymentResponse repeated = paymentController.ready(readyRequest(orderId)).getData();
@@ -267,9 +268,12 @@ class PaymentFlowIntegrationTest {
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
 
-        assertThrows(ResponseStatusException.class,
+        PaymentException exception = assertThrows(PaymentException.class,
                 () -> paymentController.payment(paymentRequest("order_unknown_001", "payment_unknown_001", READY_AMOUNT)));
 
+        assertEquals(409, exception.getCode());
+        assertEquals(PaymentStatus.UNKNOWN, exception.getResult().getStatus());
+        assertEquals("TOSS_COMMUNICATION_ERROR", exception.getResult().getCode());
         assertEquals(PaymentStatus.UNKNOWN,
                 paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
         assertEquals(3, paymentHistoryRepository.count());
@@ -291,7 +295,7 @@ class PaymentFlowIntegrationTest {
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.failure(400, "INVALID_REQUEST", "승인 거절"));
 
-        assertThrows(ResponseStatusException.class,
+        assertThrows(PaymentException.class,
                 () -> paymentController.payment(paymentRequest("order_rejected_001", "payment_rejected_001", READY_AMOUNT)));
 
         Payment saved = paymentRepository.findById(ready.getPaymentId()).orElseThrow();
@@ -305,6 +309,25 @@ class PaymentFlowIntegrationTest {
         assertFalse(log.getSuccessYn());
         assertEquals("INVALID_REQUEST", log.getErrorType());
         assertEquals(0, applicationEvents.stream(PaymentCompletedEvent.class).count());
+    }
+
+    /**
+     * PG 호출 중 예상하지 못한 예외도 승인 실패로 단정하지 않고 결과 미확인으로 기록한다.
+     */
+    @Test
+    void unexpectedProviderExceptionRemainsUnknown() {
+        PaymentResponse ready = paymentController.ready(readyRequest("order_unexpected_001")).getData();
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenThrow(new IllegalStateException("PG 호출 예외"));
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> paymentController.payment(
+                        paymentRequest("order_unexpected_001", "payment_unexpected_001", READY_AMOUNT)));
+
+        assertEquals(409, exception.getStatusCode().value());
+        assertEquals(PaymentStatus.UNKNOWN,
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
+        assertEquals("IllegalStateException", paymentApiLogRepository.findAll().getFirst().getErrorType());
     }
 
     /**
@@ -374,10 +397,10 @@ class PaymentFlowIntegrationTest {
         when(tossPaymentApi.paymentByKey(paymentKey))
                 .thenReturn(TossApiResult.failure(404, "NOT_FOUND", "결제 조회 결과 없음"));
 
-        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+        PaymentException exception = assertThrows(PaymentException.class,
                 () -> paymentController.payment(request));
 
-        assertEquals(409, exception.getStatusCode().value());
+        assertEquals(409, exception.getCode());
         assertEquals(PaymentStatus.PROCESSING,
                 paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
         assertEquals(PaymentApiType.PAYMENT_LOOKUP, paymentApiLogRepository.findAll().getFirst().getApiType());
@@ -402,10 +425,10 @@ class PaymentFlowIntegrationTest {
         when(tossPaymentApi.paymentByKey(paymentKey)).thenReturn(
                 TossApiResult.failure(404, "NOT_FOUND_PAYMENT", "결제 조회 결과 없음"));
 
-        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+        PaymentException exception = assertThrows(PaymentException.class,
                 () -> paymentController.payment(request));
 
-        assertEquals(409, exception.getStatusCode().value());
+        assertEquals(409, exception.getCode());
         assertEquals(PaymentStatus.FAILED,
                 paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
 
@@ -427,7 +450,7 @@ class PaymentFlowIntegrationTest {
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
 
-        assertThrows(ResponseStatusException.class, () -> paymentController.payment(request));
+        assertThrows(PaymentException.class, () -> paymentController.payment(request));
         assertEquals(PaymentStatus.UNKNOWN,
                 paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
 
@@ -452,12 +475,12 @@ class PaymentFlowIntegrationTest {
         PaymentRequest request = paymentRequest(orderId, paymentKey, READY_AMOUNT);
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
-        assertThrows(ResponseStatusException.class, () -> paymentController.payment(request));
+        assertThrows(PaymentException.class, () -> paymentController.payment(request));
 
         when(tossPaymentApi.paymentByKey(paymentKey))
                 .thenReturn(TossApiResult.failure(404, "NOT_FOUND_PAYMENT", "결제 조회 결과 없음"));
 
-        assertThrows(ResponseStatusException.class, () -> paymentController.payment(request));
+        assertThrows(PaymentException.class, () -> paymentController.payment(request));
         assertEquals(PaymentStatus.UNKNOWN,
                 paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
     }

@@ -10,6 +10,7 @@ import com.paymentModule.data.enums.PaymentMethod;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.data.model.entity.payment.Payment;
 import com.paymentModule.domain.payment.dto.request.PaymentRequest;
+import com.paymentModule.global.exception.PaymentException;
 import com.paymentModule.global.properties.payments.TossApiProperties;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -17,6 +18,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -95,8 +97,10 @@ class TossPaymentProcessorTest {
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
 
-        PaymentProcessResult result = processor.payment(payment("order_error_001", 1500L),
-                request("order_error_001", "payment_error_001", 1500L));
+        PaymentException exception = assertThrows(PaymentException.class,
+                () -> processor.payment(payment("order_error_001", 1500L),
+                        request("order_error_001", "payment_error_001", 1500L)));
+        PaymentProcessResult result = exception.getResult();
 
         assertEquals(PaymentStatus.UNKNOWN, result.getStatus());
         assertNull(result.getHttpStatus());
@@ -171,8 +175,10 @@ class TossPaymentProcessorTest {
         when(tossPaymentApi.paymentByKey("payment_not_found_001"))
                 .thenReturn(TossApiResult.failure(404, "NOT_FOUND_PAYMENT", "결제를 찾을 수 없습니다."));
 
-        PaymentProcessResult result = processor.lookup(payment("order_not_found_001", 1500L),
-                request("order_not_found_001", "payment_not_found_001", 1500L));
+        PaymentException exception = assertThrows(PaymentException.class,
+                () -> processor.lookup(payment("order_not_found_001", 1500L),
+                        request("order_not_found_001", "payment_not_found_001", 1500L)));
+        PaymentProcessResult result = exception.getResult();
 
         assertEquals(PaymentStatus.FAILED, result.getStatus());
         assertEquals(404, result.getHttpStatus());
@@ -188,8 +194,10 @@ class TossPaymentProcessorTest {
         when(tossPaymentApi.paymentByKey("payment_lookup_error_001"))
                 .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
 
-        PaymentProcessResult result = processor.lookup(payment("order_lookup_error_001", 1500L),
-                request("order_lookup_error_001", "payment_lookup_error_001", 1500L));
+        PaymentException exception = assertThrows(PaymentException.class,
+                () -> processor.lookup(payment("order_lookup_error_001", 1500L),
+                        request("order_lookup_error_001", "payment_lookup_error_001", 1500L)));
+        PaymentProcessResult result = exception.getResult();
 
         assertEquals(PaymentStatus.UNKNOWN, result.getStatus());
         assertNull(result.getHttpStatus());

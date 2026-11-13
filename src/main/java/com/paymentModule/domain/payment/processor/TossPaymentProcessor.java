@@ -11,6 +11,7 @@ import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.data.model.entity.payment.Payment;
 import com.paymentModule.domain.payment.dto.request.PaymentReadyRequest;
 import com.paymentModule.domain.payment.dto.request.PaymentRequest;
+import com.paymentModule.global.exception.PaymentException;
 import com.paymentModule.global.properties.payments.TossApiProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpMethod;
@@ -103,13 +104,14 @@ public class TossPaymentProcessor implements PaymentProcessor {
         };
 
         if (result.getData() == null) {
-            // 응답 없는 통신 오류와 PG 서버 오류는 승인 여부를 확인할 수 없다.
-            return PaymentProcessResult.builder()
+            //PG API 오류는 서비스에서 DB 상태를 기록할 수 있도록 공통 결과를 예외에 담는다.
+            //응답 없는 통신 오류와 PG 서버 오류는 승인 여부를 확인할 수 없어 UNKNOWN이다.
+            throw new PaymentException(PaymentProcessResult.builder()
                     .httpStatus(httpStatus)
                     .status(result.getHttpStatus() >= 500 ? PaymentStatus.UNKNOWN : PaymentStatus.FAILED)
                     .code(result.getCode())
                     .message(result.getMessage())
-                    .build();
+                    .build());
         }
 
         TossApiResponse approved = result.getData();
@@ -184,12 +186,13 @@ public class TossPaymentProcessor implements PaymentProcessor {
                     && ("NOT_FOUND_PAYMENT".equals(result.getCode())
                     || "NOT_FOUND".equals(result.getCode()));
 
-            return PaymentProcessResult.builder()
+            //그 밖의 조회 오류는 결제 부재로 단정하지 않고 서비스에 UNKNOWN으로 전달한다.
+            throw new PaymentException(PaymentProcessResult.builder()
                     .httpStatus(httpStatus)
                     .status(notFound ? PaymentStatus.FAILED : PaymentStatus.UNKNOWN)
                     .code(result.getCode())
                     .message(result.getMessage())
-                    .build();
+                    .build());
         }
 
         TossApiResponse response = result.getData();

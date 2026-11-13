@@ -35,12 +35,12 @@ public interface PaymentProcessor {
     void validate(PaymentRequest request);
 
     /**
-     * 저장된 결제 정보로 PG 승인을 요청하고 결과를 반환한다.
+     * 저장된 결제 정보로 PG 승인을 요청한다. API 오류는 PaymentException으로 전달한다.
      */
     PaymentProcessResult payment(Payment payment, PaymentRequest request);
 
     /**
-     * 처리 중인 결제의 실제 PG 결과를 조회한다.
+     * 처리 중인 결제의 실제 PG 결과를 조회한다. API 오류는 PaymentException으로 전달한다.
      */
     PaymentProcessResult lookup(Payment payment, PaymentRequest request);
 }

@@ -29,7 +29,7 @@ Redis 의존성과 컨테이너 설정은 포함되어 있지만, 현재 결제 
 2. 같은 주문에 `READY` 시도가 있으면 기존 시도를 재사용하고 금액을 갱신합니다. `FAILED` 시도는 이력으로 남기고 새 시도를 생성합니다. `PROCESSING`, `UNKNOWN`, `SUCCESS` 등은 다시 준비하지 않습니다.
 3. 클라이언트가 반환된 주문 정보로 PG SDK를 실행하고, 인증 결과의 `paymentKey`, `orderId`, `amount`를 결제 승인 API에 전달합니다.
 4. `POST /apis/v3/payments`는 서버에서 다시 계산한 금액, 저장 금액, 전달 금액을 비교합니다. 결제 행을 잠근 짧은 트랜잭션에서 `READY → PROCESSING`으로 변경해 같은 주문의 중복 승인 요청을 막습니다.
-5. DB 트랜잭션 밖에서 PG 승인 API를 호출한 뒤, 별도 트랜잭션에서 결과와 `payment_history`, `payment_api_log`를 저장합니다. 승인 결과를 확정할 수 없는 통신 오류는 `UNKNOWN`으로 기록합니다.
+5. DB 트랜잭션 밖에서 PG 승인 API를 호출합니다. 정상 API 응답의 결제 상태는 서비스에서 처리하고, PG API 오류는 `PaymentException`으로 전달합니다. 승인 결과를 확정할 수 없는 호출 오류는 `UNKNOWN`으로 기록합니다.
 6. 같은 결제 키로 `PROCESSING` 또는 `UNKNOWN` 요청이 다시 들어오면 PG 결제를 조회합니다. 조회 성공은 주문번호·금액·결제 키를 대조해 확정합니다. 토스가 결제 정보 부재를 명시한 404는 진행 중 요청의 유예 시간이 지난 뒤 `FAILED`로 확정해 새 `ready` 시도를 허용합니다. 통신 오류 등 불확실한 조회 결과는 기존 상태를 유지합니다.
 7. 성공 결과가 커밋되면 `PaymentCompletedEvent`를 발행합니다. 비동기 수신부는 `orderStatus`를 `BEFORE → PENDING`으로 변경합니다. 실제 주문 반영이 성공한 뒤 `COMPLETE`로 변경하는 연결은 TODO로 남아 있습니다.
 
@@ -71,6 +71,14 @@ PG 호출은 DB 트랜잭션 밖에서 실행하고, 호출 전후의 DB 변경�
 
 두 상태의 마지막 변경 시각을 각각 저장합니다. `payment_history`는 결제 생성과 상태 변경 이력을, `payment_api_log`는 실제 PG 승인·조회 호출 결과를 기록합니다. 완료 이벤트는 재전달될 수 있으므로 사용처의 주문·상품 반영은 결제 ID를 기준으로 중복 실행에 안전하게 연결해야 합니다. 현재 수신부는 `PENDING` 전환까지만 구현되어 있어, 사용처 연동 전에는 재전달만으로 `COMPLETE`가 되지 않습니다.
 
+### PG 오류와 결과 저장
+
+`PaymentProcessor`는 PG별 응답을 공통 `PaymentProcessResult`로 변환합니다. API 호출이 정상적으로 끝나 결제 상태를 받은 경우에는 결과를 반환합니다. PG API 오류는 상태, PG HTTP 상태, 오류 코드·메시지를 담은 `PaymentException`을 던집니다. 그 밖의 예상하지 못한 호출 예외는 서비스에서 따로 잡아 최초 승인 결과를 `UNKNOWN`으로 기록하고, 결과 조회 중이었다면 기존 결제 상태를 유지합니다. 정상 API 응답 뒤 DB 저장 중 발생한 예외는 PG 호출 오류로 다시 기록하지 않습니다.
+
+`PaymentService`는 PG 호출과 결제 상태 분기를 같은 `try`에서 수행하고, `PaymentException`과 그 외 예외를 각각 처리합니다. DB 저장은 별도 트랜잭션의 `PaymentTransactionService.writeResult()`로 통일했습니다. 이 메서드는 결과 상태에 따라 `payment`와 `payment_history`를 갱신하고 PG 호출 결과를 `payment_api_log`에 기록합니다. 성공 결과에는 예외를 `null`로 전달하며, 예외 유무가 아닌 `PaymentProcessResult.status`로 결제 상태를 판단합니다. 조회 결과가 불확실하거나 결제 부재 404의 유예 시간 안이면 결제 상태를 바꾸지 않고 API 로그만 남깁니다.
+
+PG API 오류는 `BusinessException`을 상속한 `PaymentException`으로 전달하고 `ResponseCode.PAYMENT_CONFLICT`의 HTTP 409 응답을 사용합니다. 오류 응답의 `code`에는 PG 오류 코드를, `message`에는 안내 문구를 담고, DB 기록에 사용하는 결과 객체 전체는 응답에 노출하지 않습니다. PG 오류 코드가 없으면 모듈의 기본 409 코드를 사용합니다.
+
 ### 토스 API 클라이언트
 
 `TossPaymentApi`에는 결제 승인, `paymentKey` 조회, `orderId` 조회, 결제 취소, 가상계좌 발급 메서드가 있습니다. 현재 `ready → payment` 서비스 흐름에는 결제 승인과 결과 미확인 시 `paymentKey` 조회가 연결되어 있습니다. `orderId` 조회·취소·가상계좌 발급은 클라이언트 메서드가 있어도 해당 업무 API 흐름까지 구현된 것은 아닙니다.
@@ -98,10 +106,10 @@ src/main/java/com/paymentModule/
 ├── domain/user/                      회원 인증 API와 서비스
 ├── domain/payment/                   결제 API, 서비스, PG 처리기
 ├── event/payments/                   결제 완료 이벤트와 비동기 수신부
-└── global/                           설정 프로퍼티, 인증·쿠키 유틸리티, 재전달 스케줄러
+└── global/                           설정 프로퍼티, 예외 처리, 인증·쿠키 유틸리티, 재전달 스케줄러
 ```
 
-`PaymentService`는 결제 흐름을 조율하고, `PaymentTransactionService`는 결제 생성과 상태·이력·로그 저장을 짧은 트랜잭션으로 처리합니다. `PaymentProcessor` 구현은 `PaymentProvider`를 키로 한 Bean 맵에서 선택하며, 현재 등록된 구현은 `TossPaymentProcessor`입니다.
+`PaymentService`는 결제 흐름을 조율하고, `PaymentTransactionService`는 결제 생성과 `writeResult()`의 상태·이력·로그 저장을 짧은 트랜잭션으로 처리합니다. `PaymentProcessor` 구현은 `PaymentProvider`를 키로 한 Bean 맵에서 선택하며, 현재 등록된 구현은 `TossPaymentProcessor`입니다.
 
 주요 테이블은 현재 결제 상태를 보관하는 `payment`, 상태 변경을 기록하는 `payment_history`, 실제 PG 호출 결과를 기록하는 `payment_api_log`입니다. 실패한 결제 행은 보존하고, 진행 가능한 결제 시도에는 `(provider, activeOrderId)` 고유 제약을 적용합니다.
 
