@@ -1,17 +1,14 @@
 package com.paymentModule.domain.payment;
 
-import com.api.toss.TossPaymentApi;
-import com.api.toss.dto.request.TossConfirmRequest;
-import com.api.toss.dto.response.TossApiResponse;
-import com.api.toss.dto.response.TossApiResult;
-import com.api.toss.enums.TossPaymentMethod;
-import com.api.toss.enums.TossPaymentStatus;
 import com.paymentModule.PaymentModuleApplication;
+import com.paymentModule.api.toss.TossPaymentApi;
+import com.paymentModule.api.toss.dto.request.TossConfirmRequest;
+import com.paymentModule.api.toss.dto.response.TossApiResponse;
+import com.paymentModule.api.toss.dto.response.TossApiResult;
+import com.paymentModule.api.toss.enums.TossPaymentMethod;
+import com.paymentModule.api.toss.enums.TossPaymentStatus;
 import com.paymentModule.data.dto.user.CustomUserDetail;
-import com.paymentModule.data.enums.PaymentHistoryType;
-import com.paymentModule.data.enums.PaymentProvider;
-import com.paymentModule.data.enums.PaymentStatus;
-import com.paymentModule.data.enums.UserRoleType;
+import com.paymentModule.data.enums.*;
 import com.paymentModule.data.model.entity.payment.Payment;
 import com.paymentModule.data.model.entity.payment.PaymentApiLog;
 import com.paymentModule.data.model.entity.user.User;
@@ -22,12 +19,14 @@ import com.paymentModule.domain.payment.controller.PaymentController;
 import com.paymentModule.domain.payment.dto.request.PaymentReadyRequest;
 import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.domain.payment.dto.response.PaymentResponse;
-import com.paymentModule.domain.payment.event.PaymentCompletedEvent;
+import com.paymentModule.domain.payment.service.PaymentTransactionService;
+import com.paymentModule.event.payments.PaymentCompletedEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -37,21 +36,14 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDateTime;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 /**
  * 실제 DB 트랜잭션으로 결제 준비부터 PG 승인 결과 저장까지 검증한다.
@@ -70,11 +62,16 @@ import static org.mockito.Mockito.when;
 })
 class PaymentFlowIntegrationTest {
 
+    private static final Long READY_AMOUNT = 10_000L;
+
     @Autowired
     private PaymentController paymentController;
 
     @Autowired
     private PaymentRepository paymentRepository;
+
+    @Autowired
+    private PaymentTransactionService paymentTransactionService;
 
     @Autowired
     private PaymentHistoryRepository paymentHistoryRepository;
@@ -124,14 +121,20 @@ class PaymentFlowIntegrationTest {
     @Test
     void readyAndPaymentSuccess() {
         String orderId = "order_success_001";
-        PaymentResponse ready = paymentController.ready(readyRequest(orderId, 1500L)).getData();
+        PaymentResponse ready = paymentController.ready(readyRequest(orderId)).getData();
 
-        assertEquals(PaymentStatus.READY, ready.getStatus());
+        assertEquals(PaymentStatus.READY, ready.getPaymentStatus());
+        assertEquals(OrderStatus.BEFORE, ready.getOrderStatus());
+        Payment prepared = paymentRepository.findById(ready.getPaymentId()).orElseThrow();
+        assertEquals(OrderStatus.BEFORE, prepared.getOrderStatus());
+        assertNotNull(prepared.getPaymentStatusChangedAt());
+        assertNotNull(prepared.getOrderStatusChangedAt());
+        assertEquals(READY_AMOUNT, ready.getAmount());
         assertNotNull(ready.getPaymentId());
         assertEquals(1, paymentHistoryRepository.count());
         assertEquals(0, paymentApiLogRepository.count());
 
-        TossApiResponse approved = tossResponse(orderId, "payment_success_001", 1500L,
+        TossApiResponse approved = tossResponse(orderId, "payment_success_001", READY_AMOUNT,
                 TossPaymentStatus.DONE);
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenAnswer(invocation -> {
@@ -140,13 +143,21 @@ class PaymentFlowIntegrationTest {
                     return TossApiResult.success(200, approved);
                 });
 
-        PaymentRequest request = paymentRequest(orderId, "payment_success_001", 1500L);
+        PaymentRequest request = paymentRequest(orderId, "payment_success_001", READY_AMOUNT);
         PaymentResponse completed = paymentController.payment(request).getData();
 
-        assertEquals(PaymentStatus.SUCCESS, completed.getStatus());
+        assertEquals(PaymentStatus.SUCCESS, completed.getPaymentStatus());
+        assertEquals(OrderStatus.BEFORE, completed.getOrderStatus());
         Payment saved = paymentRepository.findById(ready.getPaymentId()).orElseThrow();
         assertEquals("payment_success_001", saved.getTransactionId());
         assertNotNull(saved.getApprovedAt());
+        assertFalse(saved.getPaymentStatusChangedAt().isBefore(prepared.getPaymentStatusChangedAt()));
+        assertEquals(0, paymentRepository.findOrderRetryCandidates(
+                PaymentStatus.SUCCESS, OrderStatus.BEFORE, OrderStatus.PENDING,
+                LocalDateTime.now().minusMinutes(10), PageRequest.of(0, 100)).size());
+        assertEquals(1, paymentRepository.findOrderRetryCandidates(
+                PaymentStatus.SUCCESS, OrderStatus.BEFORE, OrderStatus.PENDING,
+                LocalDateTime.now().plusMinutes(1), PageRequest.of(0, 100)).size());
 
         Set<PaymentHistoryType> historyTypes = paymentHistoryRepository.findAll().stream()
                 .map(history -> history.getHistoryType())
@@ -168,33 +179,40 @@ class PaymentFlowIntegrationTest {
         assertEquals(ready.getPaymentId(), event.paymentId());
         assertEquals(PaymentProvider.TOSS, event.provider());
         assertEquals(orderId, event.orderId());
-        assertEquals(1500L, event.amount());
+        assertEquals(READY_AMOUNT, event.amount());
 
         //중복 호출은 저장된 성공 결과만 반환하고 PG 재승인과 이벤트 중복 발행을 막는다.
-        assertEquals(PaymentStatus.SUCCESS, paymentController.payment(request).getData().getStatus());
+        assertEquals(PaymentStatus.SUCCESS, paymentController.payment(request).getData().getPaymentStatus());
         assertEquals(3, paymentHistoryRepository.count());
         assertEquals(1, paymentApiLogRepository.count());
         assertEquals(1, applicationEvents.stream(PaymentCompletedEvent.class).count());
 
         assertThrows(ResponseStatusException.class,
-                () -> paymentController.ready(readyRequest(orderId, 1500L)));
+                () -> paymentController.ready(readyRequest(orderId)));
 
         verify(tossPaymentApi).confirm(any(TossConfirmRequest.class), anyString());
+
+        //주문 업무가 완료되면 별도 트랜잭션에서 반영 상태를 확정한다.
+        paymentTransactionService.updateOrderPending(ready.getPaymentId());
+        assertNotNull(paymentRepository.findById(ready.getPaymentId()).orElseThrow().getOrderStatusChangedAt());
+        paymentTransactionService.updateOrderComplete(ready.getPaymentId());
+        assertEquals(OrderStatus.COMPLETE,
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getOrderStatus());
     }
 
     /**
-     * 새로고침으로 같은 주문을 다시 준비하면 결제 시도를 재사용하고 금액만 갱신한다.
+     * 새로고침으로 같은 주문을 다시 준비하면 서버 금액으로 기존 결제 시도를 재사용한다.
      */
     @Test
-    void repeatedReadyUpdatesAmount() {
+    void repeatedReadyReusesPayment() {
         PaymentResponse first = paymentController.ready(
-                readyRequest("order_refresh_001", 1500L)).getData();
+                readyRequest("order_refresh_001")).getData();
         PaymentResponse repeated = paymentController.ready(
-                readyRequest("order_refresh_001", 2000L)).getData();
+                readyRequest("order_refresh_001")).getData();
 
         assertEquals(first.getPaymentId(), repeated.getPaymentId());
-        assertEquals(PaymentStatus.READY, repeated.getStatus());
-        assertEquals(2000L, repeated.getAmount());
+        assertEquals(PaymentStatus.READY, repeated.getPaymentStatus());
+        assertEquals(READY_AMOUNT, repeated.getAmount());
         assertEquals(1, paymentRepository.count());
         assertEquals(1, paymentHistoryRepository.count());
         verifyNoInteractions(tossPaymentApi);
@@ -206,20 +224,20 @@ class PaymentFlowIntegrationTest {
     @Test
     void failedPaymentAllowsNewReady() {
         String orderId = "order_retry_001";
-        PaymentResponse first = paymentController.ready(readyRequest(orderId, 1500L)).getData();
+        PaymentResponse first = paymentController.ready(readyRequest(orderId)).getData();
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.failure(400, "INVALID_REQUEST", "승인 거절"));
 
         assertThrows(ResponseStatusException.class,
-                () -> paymentController.payment(paymentRequest(orderId, "payment_retry_001", 1500L)));
+                () -> paymentController.payment(paymentRequest(orderId, "payment_retry_001", READY_AMOUNT)));
 
-        PaymentResponse repeated = paymentController.ready(readyRequest(orderId, 1500L)).getData();
+        PaymentResponse repeated = paymentController.ready(readyRequest(orderId)).getData();
 
         assertNotEquals(first.getPaymentId(), repeated.getPaymentId());
         assertEquals(PaymentStatus.FAILED,
-                paymentRepository.findById(first.getPaymentId()).orElseThrow().getStatus());
+                paymentRepository.findById(first.getPaymentId()).orElseThrow().getPaymentStatus());
         assertEquals(PaymentStatus.READY,
-                paymentRepository.findById(repeated.getPaymentId()).orElseThrow().getStatus());
+                paymentRepository.findById(repeated.getPaymentId()).orElseThrow().getPaymentStatus());
         assertEquals(2, paymentRepository.count());
     }
 
@@ -228,13 +246,13 @@ class PaymentFlowIntegrationTest {
      */
     @Test
     void differentAmountStopsBeforeApproval() {
-        PaymentResponse ready = paymentController.ready(readyRequest("order_amount_001", 1500L)).getData();
+        PaymentResponse ready = paymentController.ready(readyRequest("order_amount_001")).getData();
 
         assertThrows(ResponseStatusException.class,
                 () -> paymentController.payment(paymentRequest("order_amount_001", "payment_amount_001", 1000L)));
 
         assertEquals(PaymentStatus.READY,
-                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getStatus());
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
         assertEquals(1, paymentHistoryRepository.count());
         assertEquals(0, paymentApiLogRepository.count());
         assertEquals(0, applicationEvents.stream(PaymentCompletedEvent.class).count());
@@ -246,16 +264,18 @@ class PaymentFlowIntegrationTest {
      */
     @Test
     void communicationErrorRemainsUnknown() {
-        PaymentResponse ready = paymentController.ready(readyRequest("order_unknown_001", 1500L)).getData();
+        PaymentResponse ready = paymentController.ready(readyRequest("order_unknown_001")).getData();
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
 
         assertThrows(ResponseStatusException.class,
-                () -> paymentController.payment(paymentRequest("order_unknown_001", "payment_unknown_001", 1500L)));
+                () -> paymentController.payment(paymentRequest("order_unknown_001", "payment_unknown_001", READY_AMOUNT)));
 
         assertEquals(PaymentStatus.UNKNOWN,
-                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getStatus());
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
         assertEquals(3, paymentHistoryRepository.count());
+        assertTrue(paymentHistoryRepository.findAll().stream()
+                .anyMatch(history -> history.getHistoryType() == PaymentHistoryType.PAYMENT_UNKNOWN));
         PaymentApiLog log = paymentApiLogRepository.findAll().getFirst();
         assertNull(log.getResponseStatus());
         assertFalse(log.getSuccessYn());
@@ -268,15 +288,15 @@ class PaymentFlowIntegrationTest {
      */
     @Test
     void providerRejectionIsRecorded() {
-        PaymentResponse ready = paymentController.ready(readyRequest("order_rejected_001", 1500L)).getData();
+        PaymentResponse ready = paymentController.ready(readyRequest("order_rejected_001")).getData();
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.failure(400, "INVALID_REQUEST", "승인 거절"));
 
         assertThrows(ResponseStatusException.class,
-                () -> paymentController.payment(paymentRequest("order_rejected_001", "payment_rejected_001", 1500L)));
+                () -> paymentController.payment(paymentRequest("order_rejected_001", "payment_rejected_001", READY_AMOUNT)));
 
         Payment saved = paymentRepository.findById(ready.getPaymentId()).orElseThrow();
-        assertEquals(PaymentStatus.FAILED, saved.getStatus());
+        assertEquals(PaymentStatus.FAILED, saved.getPaymentStatus());
         assertEquals("INVALID_REQUEST", saved.getFailureCode());
         assertTrue(paymentHistoryRepository.findAll().stream()
                 .anyMatch(history -> history.getHistoryType() == PaymentHistoryType.PAYMENT_FAILED));
@@ -293,35 +313,106 @@ class PaymentFlowIntegrationTest {
      */
     @Test
     void waitingForDepositDoesNotComplete() {
-        PaymentResponse ready = paymentController.ready(readyRequest("order_pending_001", 1500L)).getData();
-        TossApiResponse waiting = tossResponse("order_pending_001", "payment_pending_001", 1500L,
+        PaymentResponse ready = paymentController.ready(readyRequest("order_pending_001")).getData();
+        TossApiResponse waiting = tossResponse("order_pending_001", "payment_pending_001", READY_AMOUNT,
                 TossPaymentStatus.WAITING_FOR_DEPOSIT);
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.success(200, waiting));
 
         PaymentResponse result = paymentController.payment(
-                paymentRequest("order_pending_001", "payment_pending_001", 1500L)).getData();
+                paymentRequest("order_pending_001", "payment_pending_001", READY_AMOUNT)).getData();
 
-        assertEquals(PaymentStatus.PROCESSING, result.getStatus());
+        assertEquals(PaymentStatus.PROCESSING, result.getPaymentStatus());
         assertEquals(PaymentStatus.PROCESSING,
-                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getStatus());
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
         assertTrue(paymentHistoryRepository.findAll().stream()
                 .anyMatch(history -> history.getHistoryType() == PaymentHistoryType.PAYMENT_PENDING));
         assertEquals(1, paymentApiLogRepository.count());
         assertEquals(0, applicationEvents.stream(PaymentCompletedEvent.class).count());
 
         assertThrows(ResponseStatusException.class,
-                () -> paymentController.ready(readyRequest("order_pending_001", 1500L)));
+                () -> paymentController.ready(readyRequest("order_pending_001")));
+    }
+
+    /**
+     * 처리 중 재진입 시 최초 결제 키로 PG를 조회하고 성공 결과를 저장한다.
+     */
+    @Test
+    void processingPaymentIsRecoveredByLookup() {
+        String orderId = "order_recovery_001";
+        String paymentKey = "payment_recovery_001";
+        PaymentResponse ready = paymentController.ready(readyRequest(orderId)).getData();
+        PaymentRequest request = paymentRequest(orderId, paymentKey, READY_AMOUNT);
+        paymentTransactionService.updateProcessing(request);
+
+        assertEquals(paymentKey,
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getTransactionId());
+        when(tossPaymentApi.paymentByKey(paymentKey)).thenReturn(TossApiResult.success(200,
+                tossResponse(orderId, paymentKey, READY_AMOUNT, TossPaymentStatus.DONE)));
+
+        PaymentResponse recovered = paymentController.payment(request).getData();
+
+        assertEquals(PaymentStatus.SUCCESS, recovered.getPaymentStatus());
+        assertEquals(PaymentStatus.SUCCESS,
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
+        assertEquals(PaymentApiType.PAYMENT_LOOKUP, paymentApiLogRepository.findAll().getFirst().getApiType());
+        assertEquals("GET", paymentApiLogRepository.findAll().getFirst().getHttpMethod());
+        assertEquals(1, applicationEvents.stream(PaymentCompletedEvent.class).count());
+        verify(tossPaymentApi).paymentByKey(paymentKey);
+        verify(tossPaymentApi, never()).confirm(any(TossConfirmRequest.class), anyString());
+    }
+
+    /**
+     * PG 조회 결과가 없으면 다른 결제 시도를 만들지 않고 처리 중 상태를 유지한다.
+     */
+    @Test
+    void processingLookupWithoutResultRemainsProcessing() {
+        String orderId = "order_lookup_pending_001";
+        String paymentKey = "payment_lookup_pending_001";
+        PaymentResponse ready = paymentController.ready(readyRequest(orderId)).getData();
+        PaymentRequest request = paymentRequest(orderId, paymentKey, READY_AMOUNT);
+        paymentTransactionService.updateProcessing(request);
+        when(tossPaymentApi.paymentByKey(paymentKey))
+                .thenReturn(TossApiResult.failure(404, "NOT_FOUND", "결제 조회 결과 없음"));
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> paymentController.payment(request));
+
+        assertEquals(409, exception.getStatusCode().value());
+        assertEquals(PaymentStatus.PROCESSING,
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
+        assertEquals(PaymentApiType.PAYMENT_LOOKUP, paymentApiLogRepository.findAll().getFirst().getApiType());
+        assertEquals(404, paymentApiLogRepository.findAll().getFirst().getResponseStatus());
+        verify(tossPaymentApi, never()).confirm(any(TossConfirmRequest.class), anyString());
+    }
+
+    /**
+     * 다른 탭의 결제 키로 처리 중인 시도를 복구하지 못하도록 막는다.
+     */
+    @Test
+    void differentPaymentKeyCannotRecoverProcessing() {
+        String orderId = "order_two_tabs_001";
+        PaymentResponse ready = paymentController.ready(readyRequest(orderId)).getData();
+        paymentTransactionService.updateProcessing(
+                paymentRequest(orderId, "payment_first_tab_001", READY_AMOUNT));
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> paymentController.payment(
+                        paymentRequest(orderId, "payment_second_tab_001", READY_AMOUNT)));
+
+        assertEquals(409, exception.getStatusCode().value());
+        assertEquals(PaymentStatus.PROCESSING,
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
+        verifyNoInteractions(tossPaymentApi);
     }
 
     /**
      * 준비 API 입력을 만든다.
      */
-    private PaymentReadyRequest readyRequest(String orderId, Long amount) {
+    private PaymentReadyRequest readyRequest(String orderId) {
         PaymentReadyRequest request = new PaymentReadyRequest();
         ReflectionTestUtils.setField(request, "provider", PaymentProvider.TOSS);
         ReflectionTestUtils.setField(request, "orderId", orderId);
-        ReflectionTestUtils.setField(request, "amount", amount);
         return request;
     }
 

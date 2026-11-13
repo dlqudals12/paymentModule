@@ -2,6 +2,7 @@ package com.paymentModule.domain.payment.dto.response;
 
 import com.paymentModule.data.enums.PaymentProvider;
 import com.paymentModule.data.enums.PaymentStatus;
+import com.paymentModule.data.enums.OrderStatus;
 import com.paymentModule.data.model.entity.payment.Payment;
 import lombok.Builder;
 import lombok.Getter;
@@ -16,7 +17,8 @@ public class PaymentResponse {
     private PaymentProvider provider;
     private String orderId;
     private Long amount;
-    private PaymentStatus status;
+    private PaymentStatus paymentStatus;
+    private OrderStatus orderStatus;
 
     /**
      * 결제 엔티티를 API 응답으로 변환
@@ -27,7 +29,8 @@ public class PaymentResponse {
                 .provider(payment.getProvider())
                 .orderId(payment.getOrderId())
                 .amount(payment.getAmount())
-                .status(payment.getStatus())
+                .paymentStatus(payment.getPaymentStatus())
+                .orderStatus(payment.getOrderStatus())
                 .build();
     }
 }

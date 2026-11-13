@@ -20,6 +20,11 @@ public interface PaymentProcessor {
     HttpMethod requestMethod();
 
     /**
+     * 결제 결과 조회 API 주소를 반환한다.
+     */
+    String lookupUrl();
+
+    /**
      * PG별 주문 식별자 형식을 결제 준비 전에 검증한다.
      */
     void validateReady(PaymentReadyRequest request);
@@ -33,4 +38,9 @@ public interface PaymentProcessor {
      * 저장된 결제 정보로 PG 승인을 요청하고 결과를 반환한다.
      */
     PaymentProcessResult payment(Payment payment, PaymentRequest request);
+
+    /**
+     * 처리 중인 결제의 실제 PG 결과를 조회한다.
+     */
+    PaymentProcessResult lookup(Payment payment, PaymentRequest request);
 }

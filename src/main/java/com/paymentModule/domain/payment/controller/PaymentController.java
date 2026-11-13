@@ -25,9 +25,9 @@ public class PaymentController {
     private final PaymentService paymentService;
 
     /**
-     * 확정된 주문 식별자와 금액으로 결제 준비 정보를 저장한다.
+     * 주문 식별자로 서버 금액을 계산하고 결제 준비 정보를 저장한다.
      */
-    @Operation(summary = "결제 준비", description = "확정된 주문 식별자와 금액을 저장하고 SDK 요청 정보를 반환합니다.")
+    @Operation(summary = "결제 준비", description = "주문 식별자로 금액을 계산해 저장하고 SDK 요청 정보를 반환합니다.")
     @ApiResponse(responseCode = "200", description = "결제 준비 성공")
     @Secured("ROLE_USER")
     @PostMapping("/ready")

@@ -1,11 +1,12 @@
 package com.api.toss;
 
-import com.api.toss.dto.request.TossCancelRequest;
-import com.api.toss.dto.request.TossConfirmRequest;
-import com.api.toss.dto.request.TossVirtualAccountRequest;
-import com.api.toss.dto.response.TossApiResponse;
-import com.api.toss.dto.response.TossApiResult;
 import com.paymentModule.PaymentModuleApplication;
+import com.paymentModule.api.toss.TossPaymentApi;
+import com.paymentModule.api.toss.dto.request.TossCancelRequest;
+import com.paymentModule.api.toss.dto.request.TossConfirmRequest;
+import com.paymentModule.api.toss.dto.request.TossVirtualAccountRequest;
+import com.paymentModule.api.toss.dto.response.TossApiResponse;
+import com.paymentModule.api.toss.dto.response.TossApiResult;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

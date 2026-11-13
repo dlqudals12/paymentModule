@@ -4,7 +4,6 @@ import jakarta.persistence.Column;
 import jakarta.persistence.MappedSuperclass;
 import jakarta.persistence.PrePersist;
 import lombok.Getter;
-import org.hibernate.annotations.Comment;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StringUtils;
@@ -17,12 +16,10 @@ public abstract class CreatedBaseEntity {
 
     private static final String SYSTEM_USER = "system";
 
-    @Column(name = "createdBy", nullable = false, length = 255, updatable = false)
-    @Comment("등록한 사용자 로그인 ID")
+    @Column(name = "createdBy", nullable = false, length = 255, updatable = false, comment = "등록한 사용자 로그인 ID")
     private String createdBy;
 
-    @Column(name = "createdAt", nullable = false, updatable = false)
-    @Comment("등록 일시")
+    @Column(name = "createdAt", nullable = false, updatable = false, comment = "등록 일시")
     private LocalDateTime createdAt;
 
     @PrePersist

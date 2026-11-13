@@ -1,11 +1,11 @@
 package com.paymentModule.domain.payment.processor;
 
-import com.api.toss.TossPaymentApi;
-import com.api.toss.dto.request.TossConfirmRequest;
-import com.api.toss.dto.response.TossApiResponse;
-import com.api.toss.dto.response.TossApiResult;
-import com.api.toss.enums.TossPaymentMethod;
-import com.api.toss.enums.TossPaymentStatus;
+import com.paymentModule.api.toss.TossPaymentApi;
+import com.paymentModule.api.toss.dto.request.TossConfirmRequest;
+import com.paymentModule.api.toss.dto.response.TossApiResponse;
+import com.paymentModule.api.toss.dto.response.TossApiResult;
+import com.paymentModule.api.toss.enums.TossPaymentMethod;
+import com.paymentModule.api.toss.enums.TossPaymentStatus;
 import com.paymentModule.data.enums.PaymentMethod;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.data.model.entity.payment.Payment;
@@ -47,6 +47,14 @@ public class TossPaymentProcessor implements PaymentProcessor {
     @Override
     public HttpMethod requestMethod() {
         return HttpMethod.POST;
+    }
+
+    /**
+     * 토스 결제 키 조회 API 주소를 반환한다.
+     */
+    @Override
+    public String lookupUrl() {
+        return tossApiProperties.getBaseUrl() + tossApiProperties.getPath().paymentKey();
     }
 
     /**
@@ -154,6 +162,58 @@ public class TossPaymentProcessor implements PaymentProcessor {
                 .paymentMethod(paymentMethod(approved.getMethod()))
                 .code("TOSS_NOT_DONE")
                 .message("토스 결제가 완료 상태가 아닙니다: " + approved.getStatus())
+                .build();
+    }
+
+    /**
+     * 같은 결제 키로 토스 상태를 조회하고 저장된 주문 정보와 대조한다.
+     */
+    @Override
+    public PaymentProcessResult lookup(Payment payment, PaymentRequest request) {
+        TossApiResult<TossApiResponse> result = tossPaymentApi.paymentByKey(request.getPaymentKey());
+
+        //토스의 HTTP 응답이 없었던 오류는 내부 대체 상태 코드를 PG 응답으로 기록하지 않는다.
+        Integer httpStatus = switch (result.getCode()) {
+            case "TOSS_COMMUNICATION_ERROR", "TOSS_RESPONSE_ERROR", "TOSS_EMPTY_RESPONSE" -> null;
+            default -> result.getHttpStatus();
+        };
+
+        if (result.getData() == null) {
+            //조회 실패만으로 최초 승인 시도가 실패했다고 단정할 수 없다.
+            return PaymentProcessResult.builder()
+                    .httpStatus(httpStatus)
+                    .status(PaymentStatus.UNKNOWN)
+                    .code(result.getCode())
+                    .message(result.getMessage())
+                    .build();
+        }
+
+        TossApiResponse response = result.getData();
+        if (!payment.getOrderId().equals(response.getOrderId())
+                || !payment.getAmount().equals(response.getTotalAmount())
+                || !request.getPaymentKey().equals(response.getPaymentKey())) {
+            return PaymentProcessResult.builder()
+                    .httpStatus(httpStatus)
+                    .status(PaymentStatus.UNKNOWN)
+                    .code("TOSS_RESULT_MISMATCH")
+                    .message("토스 조회 결과가 준비된 결제 정보와 다릅니다.")
+                    .build();
+        }
+
+        PaymentStatus status = response.getStatus() == null
+                ? PaymentStatus.UNKNOWN : response.getStatus().getPaymentStatus();
+        if (status == PaymentStatus.READY) {
+            status = PaymentStatus.PROCESSING;
+        }
+
+        return PaymentProcessResult.builder()
+                .httpStatus(httpStatus)
+                .status(status)
+                .transactionId(response.getPaymentKey())
+                .paymentMethod(paymentMethod(response.getMethod()))
+                .approvedAt(status == PaymentStatus.SUCCESS ? approvedAt(response.getApprovedAt()) : null)
+                .code(status == PaymentStatus.SUCCESS ? null : "TOSS_LOOKUP_" + response.getStatus())
+                .message(status == PaymentStatus.SUCCESS ? null : "토스 결제 조회 상태: " + response.getStatus())
                 .build();
     }
 

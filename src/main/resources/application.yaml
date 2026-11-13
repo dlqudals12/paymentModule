@@ -49,3 +49,10 @@ payments:
       order-id: /v1/payments/orders/{orderId}
       cancel: /v1/payments/{paymentKey}/cancel
       virtual-accounts: /v1/virtual-accounts
+
+schedule:
+  payments:
+    order:
+      retry-delay-ms: 300000
+      retry-initial-delay-ms: 60000
+      retry-min-age-ms: 600000

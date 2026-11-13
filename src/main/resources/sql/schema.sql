@@ -23,7 +23,10 @@ CREATE TABLE IF NOT EXISTS payment (
     provider VARCHAR(30) NOT NULL COMMENT '결제대행사 구분값: TOSS, KCP, PORTONE 등',
     paymentType VARCHAR(30) NOT NULL COMMENT '결제 유형: ONE_TIME, SUBSCRIPTION',
     paymentMethod VARCHAR(30) NULL COMMENT '결제 수단: CARD, TRANSFER, VIRTUAL_ACCOUNT 등',
-    status VARCHAR(30) NOT NULL COMMENT '결제 상태: READY, PROCESSING, SUCCESS, FAILED, UNKNOWN, PARTIAL_CANCELLED, CANCELLED',
+    paymentStatus VARCHAR(30) NOT NULL DEFAULT 'BEFORE' COMMENT '결제 상태: BEFORE, READY, PROCESSING, SUCCESS, FAILED, UNKNOWN, PARTIAL_CANCELLED, CANCELLED',
+    paymentStatusChangedAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '결제 상태가 마지막으로 변경된 일시',
+    orderStatus VARCHAR(30) NOT NULL DEFAULT 'BEFORE' COMMENT '주문 반영 상태: BEFORE, PENDING, COMPLETE',
+    orderStatusChangedAt DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '주문 반영 상태가 마지막으로 변경된 일시',
     amount BIGINT NOT NULL COMMENT '결제 준비 단계에 저장한 금액, 원 단위',
     cancelledAmount BIGINT NOT NULL DEFAULT 0 COMMENT '누적 취소 금액, 원 단위',
     idempotencyKey VARCHAR(255) NULL COMMENT '동일한 결제 요청의 중복 처리를 방지하기 위한 요청 식별자',
@@ -43,7 +46,7 @@ CREATE TABLE IF NOT EXISTS payment (
     KEY idx_payment_provider_orderId (provider, orderId),
     KEY idx_payment_userId (userId),
     KEY idx_payment_loginId (loginId),
-    KEY idx_payment_status (status),
+    KEY idx_payment_paymentStatus (paymentStatus),
     CONSTRAINT ck_payment_amount CHECK (amount >= 0),
     CONSTRAINT ck_payment_cancelledAmount CHECK (cancelledAmount >= 0 AND cancelledAmount <= amount)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='결제 현재 상태 및 결제 결과 관리';

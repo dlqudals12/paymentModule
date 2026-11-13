@@ -1,11 +1,11 @@
 package com.paymentModule.domain.payment.processor;
 
-import com.api.toss.TossPaymentApi;
-import com.api.toss.dto.request.TossConfirmRequest;
-import com.api.toss.dto.response.TossApiResponse;
-import com.api.toss.dto.response.TossApiResult;
-import com.api.toss.enums.TossPaymentMethod;
-import com.api.toss.enums.TossPaymentStatus;
+import com.paymentModule.api.toss.TossPaymentApi;
+import com.paymentModule.api.toss.dto.request.TossConfirmRequest;
+import com.paymentModule.api.toss.dto.response.TossApiResponse;
+import com.paymentModule.api.toss.dto.response.TossApiResult;
+import com.paymentModule.api.toss.enums.TossPaymentMethod;
+import com.paymentModule.api.toss.enums.TossPaymentStatus;
 import com.paymentModule.data.enums.PaymentMethod;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.data.model.entity.payment.Payment;
@@ -17,12 +17,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /**
  * Toss API 응답을 공통 결제 결과로 변환하는 규칙을 검증한다.
@@ -121,6 +117,45 @@ class TossPaymentProcessorTest {
 
         PaymentProcessResult result = processor.payment(payment("order_mismatch_001", 1500L),
                 request("order_mismatch_001", "payment_mismatch_001", 1500L));
+
+        assertEquals(PaymentStatus.UNKNOWN, result.getStatus());
+        assertEquals("TOSS_RESULT_MISMATCH", result.getCode());
+    }
+
+    /**
+     * 처리 중 재진입 시 토스 조회의 승인 완료 결과를 공통 성공 상태로 변환한다.
+     */
+    @Test
+    void lookupCompletedPayment() {
+        TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
+        TossPaymentProcessor processor = processor(tossPaymentApi);
+        when(tossPaymentApi.paymentByKey("payment_lookup_001"))
+                .thenReturn(TossApiResult.success(200,
+                        response("order_lookup_001", "payment_lookup_001", 1500L,
+                                TossPaymentStatus.DONE)));
+
+        PaymentProcessResult result = processor.lookup(payment("order_lookup_001", 1500L),
+                request("order_lookup_001", "payment_lookup_001", 1500L));
+
+        assertEquals(PaymentStatus.SUCCESS, result.getStatus());
+        assertEquals("payment_lookup_001", result.getTransactionId());
+        assertEquals(200, result.getHttpStatus());
+    }
+
+    /**
+     * 조회 결과가 준비 금액과 다르면 결제 성공으로 확정하지 않는다.
+     */
+    @Test
+    void lookupMismatchedAmountRemainsUnknown() {
+        TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
+        TossPaymentProcessor processor = processor(tossPaymentApi);
+        when(tossPaymentApi.paymentByKey("payment_lookup_mismatch_001"))
+                .thenReturn(TossApiResult.success(200,
+                        response("order_lookup_mismatch_001", "payment_lookup_mismatch_001", 1400L,
+                                TossPaymentStatus.DONE)));
+
+        PaymentProcessResult result = processor.lookup(payment("order_lookup_mismatch_001", 1500L),
+                request("order_lookup_mismatch_001", "payment_lookup_mismatch_001", 1500L));
 
         assertEquals(PaymentStatus.UNKNOWN, result.getStatus());
         assertEquals("TOSS_RESULT_MISMATCH", result.getCode());
