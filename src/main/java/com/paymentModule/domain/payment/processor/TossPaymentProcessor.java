@@ -179,10 +179,14 @@ public class TossPaymentProcessor implements PaymentProcessor {
         };
 
         if (result.getData() == null) {
-            //조회 실패만으로 최초 승인 시도가 실패했다고 단정할 수 없다.
+            //토스가 결제 정보 부재를 명시한 경우에만 새 시도를 허용할 실패 후보로 반환한다.
+            boolean notFound = httpStatus != null && httpStatus == 404
+                    && ("NOT_FOUND_PAYMENT".equals(result.getCode())
+                    || "NOT_FOUND".equals(result.getCode()));
+
             return PaymentProcessResult.builder()
                     .httpStatus(httpStatus)
-                    .status(PaymentStatus.UNKNOWN)
+                    .status(notFound ? PaymentStatus.FAILED : PaymentStatus.UNKNOWN)
                     .code(result.getCode())
                     .message(result.getMessage())
                     .build();

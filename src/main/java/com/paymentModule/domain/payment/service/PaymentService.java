@@ -10,6 +10,7 @@ import com.paymentModule.domain.payment.dto.response.PaymentResponse;
 import com.paymentModule.domain.payment.processor.PaymentProcessResult;
 import com.paymentModule.domain.payment.processor.PaymentProcessor;
 import com.paymentModule.event.payments.PaymentCompletedEvent;
+import com.paymentModule.global.properties.payments.PaymentRecoveryProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 
@@ -30,6 +32,7 @@ public class PaymentService {
     private final PaymentTransactionService paymentTransactionService;
     private final Map<PaymentProvider, PaymentProcessor> paymentProcessors;
     private final ApplicationEventPublisher eventPublisher;
+    private final PaymentRecoveryProperties recoveryProperties;
 
     /**
      * 결제 준비
@@ -65,13 +68,13 @@ public class PaymentService {
                 throw exception;
             }
 
-            //이미 처리 중인 시도만 PG 조회로 확인한다. 다른 충돌 상태는 그대로 반환한다.
-            Payment processing = paymentTransactionService.processing(request);
-            if (processing == null) {
+            //처리 중이거나 결과 미확인 상태인 시도만 PG 조회로 확인한다.
+            Payment unresolved = paymentTransactionService.unresolvedPayment(request);
+            if (unresolved == null) {
                 throw exception;
             }
 
-            return recover(processing, processor, request);
+            return recover(unresolved, processor, request);
         }
         if (payment.getPaymentStatus() == PaymentStatus.SUCCESS) {
             return PaymentResponse.of(payment);
@@ -122,7 +125,7 @@ public class PaymentService {
     }
 
     /**
-     * 재진입한 처리 중 결제의 실제 PG 상태를 조회해 저장된 결과를 확정한다.
+     * 처리 중이거나 결과 미확인 상태인 결제를 PG 조회로 확정한다.
      */
     private PaymentResponse recover(Payment payment, PaymentProcessor processor, PaymentRequest request) {
         LocalDateTime requestedAt = LocalDateTime.now();
@@ -156,19 +159,43 @@ public class PaymentService {
         if (result.getStatus() == PaymentStatus.FAILED
                 || result.getStatus() == PaymentStatus.CANCELLED
                 || result.getStatus() == PaymentStatus.PARTIAL_CANCELLED) {
+            boolean notFound = result.getStatus() == PaymentStatus.FAILED
+                    && result.getHttpStatus() != null && result.getHttpStatus() == 404;
+
+            //통신 오류로 UNKNOWN이 되었어도 PG의 최초 승인 요청은 아직 끝나지 않았을 수 있다.
+            if (notFound && recentAttempt(payment)) {
+                paymentTransactionService.recordLookup(payment, processor, result,
+                        requestedAt, durationMs, null);
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 승인 결과를 확인하는 중입니다.");
+            }
+
             paymentTransactionService.updateFailure(payment, processor, result,
                     PaymentApiType.PAYMENT_LOOKUP, requestedAt, durationMs, null);
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, result.getMessage());
+            throw new ResponseStatusException(notFound ? HttpStatus.CONFLICT : HttpStatus.BAD_GATEWAY,
+                    notFound ? "결제를 찾을 수 없습니다. 준비부터 다시 진행해 주세요." : result.getMessage());
         }
 
-        //조회가 아직 진행 중이거나 결과를 확정할 수 없으면 기존 PROCESSING 상태를 유지한다.
+        //조회가 아직 진행 중이거나 결과를 확정할 수 없으면 기존 결제 상태를 유지한다.
         paymentTransactionService.recordLookup(payment, processor, result,
                 requestedAt, durationMs, null);
-        if (result.getStatus() == PaymentStatus.PROCESSING) {
+        if (result.getStatus() == PaymentStatus.PROCESSING
+                && payment.getPaymentStatus() == PaymentStatus.PROCESSING) {
             return PaymentResponse.of(payment);
         }
 
         throw new ResponseStatusException(HttpStatus.CONFLICT, "PG 결제 결과를 아직 확인할 수 없습니다.");
+    }
+
+    /**
+     * 최초 승인 요청이 아직 끝나지 않았을 수 있는 유예 시간인지 확인한다.
+     */
+    private boolean recentAttempt(Payment payment) {
+        if (payment.getRequestedAt() == null) {
+            return true;
+        }
+
+        return LocalDateTime.now().isBefore(payment.getRequestedAt()
+                .plus(Duration.ofMillis(recoveryProperties.getNotFoundGraceMs())));
     }
 
     /**

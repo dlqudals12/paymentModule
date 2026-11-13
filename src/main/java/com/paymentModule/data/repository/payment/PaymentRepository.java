@@ -4,7 +4,6 @@ import com.paymentModule.data.model.entity.payment.Payment;
 import com.paymentModule.data.enums.PaymentProvider;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.data.enums.OrderStatus;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -42,6 +41,5 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
             @Param("paymentStatus") PaymentStatus paymentStatus,
             @Param("beforeStatus") OrderStatus beforeStatus,
             @Param("pendingStatus") OrderStatus pendingStatus,
-            @Param("cutoff") LocalDateTime cutoff,
-            Pageable pageable);
+            @Param("cutoff") LocalDateTime cutoff);
 }

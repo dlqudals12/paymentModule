@@ -26,7 +26,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -154,10 +153,10 @@ class PaymentFlowIntegrationTest {
         assertFalse(saved.getPaymentStatusChangedAt().isBefore(prepared.getPaymentStatusChangedAt()));
         assertEquals(0, paymentRepository.findOrderRetryCandidates(
                 PaymentStatus.SUCCESS, OrderStatus.BEFORE, OrderStatus.PENDING,
-                LocalDateTime.now().minusMinutes(10), PageRequest.of(0, 100)).size());
+                LocalDateTime.now().minusMinutes(10)).size());
         assertEquals(1, paymentRepository.findOrderRetryCandidates(
                 PaymentStatus.SUCCESS, OrderStatus.BEFORE, OrderStatus.PENDING,
-                LocalDateTime.now().plusMinutes(1), PageRequest.of(0, 100)).size());
+                LocalDateTime.now().plusMinutes(1)).size());
 
         Set<PaymentHistoryType> historyTypes = paymentHistoryRepository.findAll().stream()
                 .map(history -> history.getHistoryType())
@@ -366,7 +365,7 @@ class PaymentFlowIntegrationTest {
      * PG 조회 결과가 없으면 다른 결제 시도를 만들지 않고 처리 중 상태를 유지한다.
      */
     @Test
-    void processingLookupWithoutResultRemainsProcessing() {
+    void recentProcessingLookupWithoutResultRemainsProcessing() {
         String orderId = "order_lookup_pending_001";
         String paymentKey = "payment_lookup_pending_001";
         PaymentResponse ready = paymentController.ready(readyRequest(orderId)).getData();
@@ -384,6 +383,83 @@ class PaymentFlowIntegrationTest {
         assertEquals(PaymentApiType.PAYMENT_LOOKUP, paymentApiLogRepository.findAll().getFirst().getApiType());
         assertEquals(404, paymentApiLogRepository.findAll().getFirst().getResponseStatus());
         verify(tossPaymentApi, never()).confirm(any(TossConfirmRequest.class), anyString());
+    }
+
+    /**
+     * 오래된 승인 시도를 PG에서 찾지 못하면 실패로 남기고 새 준비를 허용한다.
+     */
+    @Test
+    void staleProcessingNotFoundAllowsNewReady() {
+        String orderId = "order_stale_lookup_001";
+        String paymentKey = "payment_stale_lookup_001";
+        PaymentResponse ready = paymentController.ready(readyRequest(orderId)).getData();
+        PaymentRequest request = paymentRequest(orderId, paymentKey, READY_AMOUNT);
+        paymentTransactionService.updateProcessing(request);
+
+        Payment attempt = paymentRepository.findById(ready.getPaymentId()).orElseThrow();
+        ReflectionTestUtils.setField(attempt, "requestedAt", LocalDateTime.now().minusMinutes(11));
+        paymentRepository.saveAndFlush(attempt);
+        when(tossPaymentApi.paymentByKey(paymentKey)).thenReturn(
+                TossApiResult.failure(404, "NOT_FOUND_PAYMENT", "결제 조회 결과 없음"));
+
+        ResponseStatusException exception = assertThrows(ResponseStatusException.class,
+                () -> paymentController.payment(request));
+
+        assertEquals(409, exception.getStatusCode().value());
+        assertEquals(PaymentStatus.FAILED,
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
+
+        PaymentResponse repeated = paymentController.ready(readyRequest(orderId)).getData();
+        assertNotEquals(ready.getPaymentId(), repeated.getPaymentId());
+        assertEquals(PaymentStatus.READY, repeated.getPaymentStatus());
+        assertEquals(2, paymentRepository.count());
+    }
+
+    /**
+     * 승인 응답이 불명확했던 결제도 같은 키의 PG 조회 결과로 성공을 확정한다.
+     */
+    @Test
+    void unknownPaymentIsRecoveredByLookup() {
+        String orderId = "order_unknown_recovery_001";
+        String paymentKey = "payment_unknown_recovery_001";
+        PaymentResponse ready = paymentController.ready(readyRequest(orderId)).getData();
+        PaymentRequest request = paymentRequest(orderId, paymentKey, READY_AMOUNT);
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
+
+        assertThrows(ResponseStatusException.class, () -> paymentController.payment(request));
+        assertEquals(PaymentStatus.UNKNOWN,
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
+
+        when(tossPaymentApi.paymentByKey(paymentKey)).thenReturn(TossApiResult.success(200,
+                tossResponse(orderId, paymentKey, READY_AMOUNT, TossPaymentStatus.DONE)));
+
+        PaymentResponse recovered = paymentController.payment(request).getData();
+
+        assertEquals(PaymentStatus.SUCCESS, recovered.getPaymentStatus());
+        assertEquals(2, paymentApiLogRepository.count());
+        assertEquals(1, applicationEvents.stream(PaymentCompletedEvent.class).count());
+    }
+
+    /**
+     * 통신 오류 직후의 미조회 결과는 PG 승인이 진행 중일 수 있어 실패로 확정하지 않는다.
+     */
+    @Test
+    void recentUnknownNotFoundRemainsUnknown() {
+        String orderId = "order_recent_unknown_001";
+        String paymentKey = "payment_recent_unknown_001";
+        PaymentResponse ready = paymentController.ready(readyRequest(orderId)).getData();
+        PaymentRequest request = paymentRequest(orderId, paymentKey, READY_AMOUNT);
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
+        assertThrows(ResponseStatusException.class, () -> paymentController.payment(request));
+
+        when(tossPaymentApi.paymentByKey(paymentKey))
+                .thenReturn(TossApiResult.failure(404, "NOT_FOUND_PAYMENT", "결제 조회 결과 없음"));
+
+        assertThrows(ResponseStatusException.class, () -> paymentController.payment(request));
+        assertEquals(PaymentStatus.UNKNOWN,
+                paymentRepository.findById(ready.getPaymentId()).orElseThrow().getPaymentStatus());
     }
 
     /**

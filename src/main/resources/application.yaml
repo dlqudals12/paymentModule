@@ -38,6 +38,8 @@ jwt:
     refresh: 864000000
 
 payments:
+  recovery:
+    not-found-grace-ms: 600000
   toss:
     client-key: ${TOSS_CLIENT_KEY:}
     secret-key: ${TOSS_SECRET_KEY:}

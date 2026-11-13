@@ -30,10 +30,10 @@ Redis 의존성과 컨테이너 설정은 포함되어 있지만, 현재 결제 
 3. 클라이언트가 반환된 주문 정보로 PG SDK를 실행하고, 인증 결과의 `paymentKey`, `orderId`, `amount`를 결제 승인 API에 전달합니다.
 4. `POST /apis/v3/payments`는 서버에서 다시 계산한 금액, 저장 금액, 전달 금액을 비교합니다. 결제 행을 잠근 짧은 트랜잭션에서 `READY → PROCESSING`으로 변경해 같은 주문의 중복 승인 요청을 막습니다.
 5. DB 트랜잭션 밖에서 PG 승인 API를 호출한 뒤, 별도 트랜잭션에서 결과와 `payment_history`, `payment_api_log`를 저장합니다. 승인 결과를 확정할 수 없는 통신 오류는 `UNKNOWN`으로 기록합니다.
-6. 같은 결제 키로 `PROCESSING` 요청이 다시 들어오면 PG 결제를 조회합니다. 조회 결과가 성공이면 주문번호·금액·결제 키를 대조해 성공으로 확정하고, 아직 확인할 수 없으면 기존 상태를 유지합니다.
+6. 같은 결제 키로 `PROCESSING` 또는 `UNKNOWN` 요청이 다시 들어오면 PG 결제를 조회합니다. 조회 성공은 주문번호·금액·결제 키를 대조해 확정합니다. 토스가 결제 정보 부재를 명시한 404는 진행 중 요청의 유예 시간이 지난 뒤 `FAILED`로 확정해 새 `ready` 시도를 허용합니다. 통신 오류 등 불확실한 조회 결과는 기존 상태를 유지합니다.
 7. 성공 결과가 커밋되면 `PaymentCompletedEvent`를 발행합니다. 비동기 수신부는 `orderStatus`를 `BEFORE → PENDING`으로 변경합니다. 실제 주문 반영이 성공한 뒤 `COMPLETE`로 변경하는 연결은 TODO로 남아 있습니다.
 
-결제 상태는 `paymentStatus`, 주문 반영 상태는 `orderStatus`로 따로 저장하고 각각의 마지막 변경 시각을 `paymentStatusChangedAt`, `orderStatusChangedAt`에 기록합니다. 스케줄러는 `BEFORE` 건에는 결제 완료 시각인 `approvedAt`을, `PENDING` 건에는 주문 반영 상태 변경 시각을 사용해 유예 시간이 지난 완료 이벤트를 다시 전달합니다. 실제 상품·주문 반영 코드는 아직 연결되지 않았으므로 이벤트 수신 후에도 `orderStatus`는 `PENDING`에 남습니다.
+결제 상태는 `paymentStatus`, 주문 반영 상태는 `orderStatus`로 따로 저장하고 각각의 마지막 변경 시각을 `paymentStatusChangedAt`, `orderStatusChangedAt`에 기록합니다. 스케줄러는 `BEFORE` 건에는 결제 완료 시각인 `approvedAt`을, `PENDING` 건에는 주문 반영 상태 변경 시각을 사용해 유예 시간이 지난 모든 완료 이벤트를 다시 전달합니다. 실제 상품·주문 반영 코드는 아직 연결되지 않았으므로 이벤트 수신 후에도 `orderStatus`는 `PENDING`에 남습니다.
 
 토스 API 호출에는 시크릿 키 기반 Basic 인증, JSON 본문, 멱등키를 사용합니다. 요청·응답 로그와 DB의 API 로그에는 인증 헤더와 결제 본문 원문을 저장하지 않습니다.
 
@@ -79,7 +79,7 @@ src/main/java/com/
 
 애플리케이션 포트는 `8080`입니다. `compose.yml`에 MySQL과 Redis가 정의되어 있고 Spring Boot Docker Compose 연동이 활성화되어 있습니다. MySQL은 로컬 `3306` 포트를 사용합니다. 최초 테이블 생성 SQL은 `src/main/resources/sql/schema.sql`에 있습니다.
 
-기존 `payment` 테이블에 `activeOrderId`가 없다면 `src/main/resources/sql/migration/payment_active_order.sql`을 **별도로 적용**해야 합니다. 이번 `paymentStatus` 컬럼명 변경, `orderStatus` 추가, 두 상태 변경 시각 컬럼은 `schema.sql`에만 반영되어 있으므로 기존 DB에는 별도 스키마 갱신이 필요합니다. `CREATE TABLE IF NOT EXISTS`는 기존 테이블을 변경하지 않습니다.
+현재는 DB를 새로 생성하는 단계이므로 결제 테이블 구조는 `src/main/resources/sql/schema.sql`을 기준으로 관리합니다.
 
 ## 테스트
 
@@ -96,6 +96,6 @@ src/main/java/com/
 
 - 금액 계산 클래스는 아직 `orderId`로 주문을 조회하지 않고 임시 금액 `10,000`원을 반환합니다. 실제 주문 테이블 또는 주문 서비스에서 확정 금액을 계산하도록 연결해야 합니다.
 - `ready`와 `payment` 모두 이 임시 금액을 사용합니다. 실제 주문 연동 전에는 금액 검증이 완성된 상태가 아닙니다.
-- `PROCESSING` 재진입 시 PG 조회는 연결되어 있지만 조회 결과가 없으면 기존 상태를 유지합니다. `UNKNOWN` 상태의 별도 재조회와 PG 승인 요청 전 프로세스가 종료된 경우의 재승인 복구는 아직 구현되지 않았습니다.
+- PG 승인 요청 전에 프로세스가 종료된 경우에는 결제 조회가 처음에는 404일 수 있습니다. 유예 시간이 지난 뒤 `FAILED`로 확정하고 새 결제 준비부터 시작하도록 하며, 기존 승인 요청의 완료 여부를 완전히 보장하는 분산 선점 처리는 아직 없습니다.
 - 완료 이벤트 수신부와 미완료 건 재전달 스케줄러는 있지만 실제 주문 반영과 반영 성공 후 `COMPLETE` 전환은 아직 연결되지 않았습니다. 외부 서비스의 반영 결과를 확인하는 연동도 아직 없습니다.
 - 가상계좌 입금 완료를 반영하는 웹훅 수신 흐름은 구현되지 않았습니다.

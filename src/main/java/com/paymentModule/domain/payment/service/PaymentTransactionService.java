@@ -116,20 +116,23 @@ public class PaymentTransactionService {
     }
 
     /**
-     * 재진입한 요청이 처리 중인 결제인지 금액과 소유자를 확인한 뒤 조회한다.
+     * 재진입한 요청이 처리 중이거나 결과 미확인 상태인지 확인한다.
      */
     @Transactional
-    public Payment processing(PaymentRequest request) {
+    public Payment unresolvedPayment(PaymentRequest request) {
         CustomUserDetail user = AuthUtil.authentication();
         Payment current = verifiedPayment(request, user.getId());
 
-        //진행 중인 시도는 최초 승인에 사용한 결제 키로만 복구할 수 있다.
-        if (current.getPaymentStatus() == PaymentStatus.PROCESSING
+        boolean unresolved = current.getPaymentStatus() == PaymentStatus.PROCESSING
+                || current.getPaymentStatus() == PaymentStatus.UNKNOWN;
+
+        //미확정 시도는 최초 승인에 사용한 결제 키로만 복구할 수 있다.
+        if (unresolved
                 && !Objects.equals(current.getTransactionId(), request.getPaymentKey())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "다른 결제 키로 진행 중인 시도입니다.");
         }
 
-        return current.getPaymentStatus() == PaymentStatus.PROCESSING ? current : null;
+        return unresolved ? current : null;
     }
 
     /**
@@ -153,7 +156,8 @@ public class PaymentTransactionService {
         }
 
         //다른 요청이 결제 상태를 바꿨으면 승인 결과로 덮어쓰지 않음
-        if (current.getPaymentStatus() != PaymentStatus.PROCESSING) {
+        PaymentStatus previousStatus = current.getPaymentStatus();
+        if (previousStatus != PaymentStatus.PROCESSING && previousStatus != PaymentStatus.UNKNOWN) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 상태가 변경되었습니다.");
         }
 
@@ -163,7 +167,7 @@ public class PaymentTransactionService {
 
             //결제 대기 상태 변경 이력 저장
             saveHistory(current, PaymentHistoryType.PAYMENT_PENDING,
-                    PaymentStatus.PROCESSING, result.getCode(), result.getMessage());
+                    previousStatus, result.getCode(), result.getMessage());
 
             //PG 승인 요청과 대기 응답의 통신 기록 저장
             saveApiLog(current, processor, result, apiType, requestedAt, durationMs, null);
@@ -176,7 +180,7 @@ public class PaymentTransactionService {
 
         //결제 성공 상태 변경 이력 저장
         saveHistory(current, PaymentHistoryType.PAYMENT_SUCCEEDED,
-                PaymentStatus.PROCESSING, result.getCode(), result.getMessage());
+                previousStatus, result.getCode(), result.getMessage());
 
         //PG 승인 요청과 성공 응답의 통신 기록 저장
         saveApiLog(current, processor, result, apiType, requestedAt, durationMs, null);
@@ -196,16 +200,17 @@ public class PaymentTransactionService {
         //PG 호출 전 저장한 결제를 다시 잠그고 조회해 다른 요청의 상태 변경을 확인한다.
         Payment payment = payment(previous.getProvider(), previous.getOrderId(), user.getId());
 
-        if (payment.getPaymentStatus() != PaymentStatus.PROCESSING) {
+        PaymentStatus previousStatus = payment.getPaymentStatus();
+        if (previousStatus != PaymentStatus.PROCESSING && previousStatus != PaymentStatus.UNKNOWN) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 상태가 변경되었습니다.");
         }
 
         //PG가 반환한 실패 또는 결과 미확인 상태와 오류 내용을 결제에 남긴다.
         payment.fail(result.getStatus(), limit(result.getCode(), 100), limit(result.getMessage(), 500));
 
-        //처리 중 상태에서 실패 또는 결과 미확인 상태로 바뀐 이력을 저장한다.
+        //이전 상태에서 실패 또는 결과 미확인 상태로 바뀐 이력을 저장한다.
         saveHistory(payment, result.getStatus().getFailureHistoryType(),
-                PaymentStatus.PROCESSING, result.getCode(), result.getMessage());
+                previousStatus, result.getCode(), result.getMessage());
 
         //토스 HTTP 응답 여부와 요청 소요 시간을 별도 API 로그에 기록한다.
         saveApiLog(payment, processor, result, apiType, requestedAt, durationMs, exception);

@@ -10,8 +10,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -39,8 +37,7 @@ public class PaymentOrderRetryScheduler {
         LocalDateTime cutoff = LocalDateTime.now().minus(Duration.ofMillis(scheduleProperties.getRetryMinAgeMs()));
 
         List<Payment> payments = paymentRepository.findOrderRetryCandidates(
-                PaymentStatus.SUCCESS, OrderStatus.BEFORE, OrderStatus.PENDING, cutoff,
-                PageRequest.of(0, 100, Sort.by("updatedAt")));
+                PaymentStatus.SUCCESS, OrderStatus.BEFORE, OrderStatus.PENDING, cutoff);
 
         for (Payment payment : payments) {
             try {

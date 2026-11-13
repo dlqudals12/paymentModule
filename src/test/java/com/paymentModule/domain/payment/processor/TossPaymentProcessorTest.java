@@ -162,6 +162,40 @@ class TossPaymentProcessorTest {
     }
 
     /**
+     * 토스가 결제 정보 부재를 명시하면 실패 시도로 분류한다.
+     */
+    @Test
+    void lookupNotFoundBecomesFailed() {
+        TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
+        TossPaymentProcessor processor = processor(tossPaymentApi);
+        when(tossPaymentApi.paymentByKey("payment_not_found_001"))
+                .thenReturn(TossApiResult.failure(404, "NOT_FOUND_PAYMENT", "결제를 찾을 수 없습니다."));
+
+        PaymentProcessResult result = processor.lookup(payment("order_not_found_001", 1500L),
+                request("order_not_found_001", "payment_not_found_001", 1500L));
+
+        assertEquals(PaymentStatus.FAILED, result.getStatus());
+        assertEquals(404, result.getHttpStatus());
+    }
+
+    /**
+     * 조회 통신 오류는 결제 부재로 간주하지 않는다.
+     */
+    @Test
+    void lookupCommunicationErrorRemainsUnknown() {
+        TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
+        TossPaymentProcessor processor = processor(tossPaymentApi);
+        when(tossPaymentApi.paymentByKey("payment_lookup_error_001"))
+                .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
+
+        PaymentProcessResult result = processor.lookup(payment("order_lookup_error_001", 1500L),
+                request("order_lookup_error_001", "payment_lookup_error_001", 1500L));
+
+        assertEquals(PaymentStatus.UNKNOWN, result.getStatus());
+        assertNull(result.getHttpStatus());
+    }
+
+    /**
      * 외부 호출을 모킹한 토스 처리기를 만든다.
      */
     private TossPaymentProcessor processor(TossPaymentApi tossPaymentApi) {
