@@ -55,10 +55,12 @@ public class PaymentTransactionService {
      * 같은 주문의 준비된 결제 시도를 갱신한다.
      */
     private PaymentResponse updateReady(Payment current, CustomUserDetail user, Long amount) {
+        //다른 사용자가 같은 주문번호로 만든 결제라면 존재 여부를 드러내지 않는다.
         if (!current.getUserId().equals(user.getId())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "결제를 찾을 수 없습니다.");
         }
 
+        //승인이 시작된 시도는 준비 금액을 다시 바꿀 수 없다.
         if (current.getPaymentStatus() != PaymentStatus.READY) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "다시 준비할 수 없는 결제 상태입니다.");
         }
@@ -101,10 +103,12 @@ public class PaymentTransactionService {
         //결제 소유자와 처리 상태 확인
         Payment current = verifiedPayment(request, user.getId());
 
+        //이미 성공한 요청은 PG에 다시 승인하지 않고 저장된 결제를 반환한다.
         if (current.getPaymentStatus() == PaymentStatus.SUCCESS) {
             return current;
         }
 
+        //READY 이외의 상태는 중복 승인을 막고, 미확정 상태는 호출부의 복구 경로로 보낸다.
         if (current.getPaymentStatus() != PaymentStatus.READY) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "승인할 수 없는 결제 상태입니다.");
         }
@@ -124,6 +128,8 @@ public class PaymentTransactionService {
     @Transactional
     public Payment unresolvedPayment(PaymentRequest request) {
         CustomUserDetail user = AuthUtil.authentication();
+
+        //재진입에서도 소유자와 금액을 먼저 검증해야 다른 결제의 PG 조회를 막을 수 있다.
         Payment current = verifiedPayment(request, user.getId());
 
         boolean unresolved = current.getPaymentStatus().isRecoveryTarget();
@@ -179,6 +185,8 @@ public class PaymentTransactionService {
 
         if (updateStatus) {
             PaymentStatus previousStatus = current.getPaymentStatus();
+
+            //조회 중 다른 요청이 결제를 확정했다면 오래된 PG 결과로 다시 덮어쓰지 않는다.
             if (!previousStatus.isRecoveryTarget()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 상태가 변경되었습니다.");
             }
@@ -204,6 +212,8 @@ public class PaymentTransactionService {
 
         //조회 결과가 불확실한 경우에도 실제 PG 통신 기록은 남긴다.
         saveApiLog(current, processor, result, apiType, requestedAt, durationMs, exception);
+
+        //상태 변경 여부와 관계없이 잠금 안에서 확인한 최신 결제를 응답으로 만든다.
         return PaymentResponse.of(current);
     }
 
@@ -212,17 +222,21 @@ public class PaymentTransactionService {
      */
     @Transactional
     public boolean updateOrderPending(Long paymentId) {
+        //중복 이벤트가 동시에 도착해도 상태 전이를 한 요청씩 처리하도록 결제 행을 잠근다.
         Payment payment = paymentRepository.findLockedById(paymentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "결제를 찾을 수 없습니다."));
 
+        //결제 성공이 확정된 건만 주문 반영 단계로 보낸다.
         if (payment.getPaymentStatus() != PaymentStatus.SUCCESS) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "주문을 반영할 수 없는 결제 상태입니다.");
         }
 
+        //주문 반영이 끝난 결제는 재전달된 이벤트를 다시 처리하지 않는다.
         if (payment.getOrderStatus() == OrderStatus.COMPLETE) {
             return false;
         }
 
+        //첫 이벤트에서만 BEFORE를 PENDING으로 바꾸고, 재전달된 PENDING은 그대로 처리한다.
         if (payment.getOrderStatus() == OrderStatus.BEFORE) {
             payment.beginOrder();
         }
@@ -235,18 +249,22 @@ public class PaymentTransactionService {
      */
     @Transactional
     public void updateOrderComplete(Long paymentId) {
+        //주문 업무의 완료 통보와 중복 통보가 동시에 와도 상태를 안전하게 확정한다.
         Payment payment = paymentRepository.findLockedById(paymentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "결제를 찾을 수 없습니다."));
 
+        //이미 완료된 주문 반영은 중복 통보로 보고 종료한다.
         if (payment.getOrderStatus() == OrderStatus.COMPLETE) {
             return;
         }
 
+        //결제 성공 뒤 이벤트가 수신되어 PENDING인 경우에만 완료를 허용한다.
         if (payment.getPaymentStatus() != PaymentStatus.SUCCESS
                 || payment.getOrderStatus() != OrderStatus.PENDING) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "주문 반영을 완료할 수 없는 결제 상태입니다.");
         }
 
+        //실제 주문 업무가 성공한 뒤 별도 트랜잭션에서 완료 시각과 상태를 기록한다.
         payment.completeOrder();
     }
 
@@ -270,6 +288,7 @@ public class PaymentTransactionService {
      * 저장 금액과 현재 서버 금액, SDK 금액이 모두 같은 결제만 반환한다.
      */
     private Payment verifiedPayment(PaymentRequest request, Long userId) {
+        //진행 가능한 주문의 결제 행을 찾고, 요청한 사용자의 결제인지 확인한다.
         Payment current = payment(request.getProvider(), request.getOrderId(), userId);
 
         //복구 진입에서도 최초 승인과 동일한 금액 검증을 수행한다.
