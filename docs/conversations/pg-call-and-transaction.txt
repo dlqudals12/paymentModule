@@ -1,0 +1,69 @@
+PG 호출과 DB 트랜잭션
+
+관련 수정 내용에 대한 사용자·AI 대화 원문 발췌입니다.
+서로 다른 시점의 관련 대화를 이어서 표시했습니다. 비속어만 삭제했고, 도구 실행 내역은 제외했습니다.
+
+===== 2026-11-12 14:54 (Asia/Seoul) =====
+
+사용자:
+transactionTemplate 사용하는 이유
+
+AI:
+`transactionTemplate`을 쓴 이유는 **PG 통신 중에 DB 트랜잭션과 결제 행 잠금을 유지하지 않기 위해서**입니다.
+
+현재 `PaymentService.payment()`는 다음 순서입니다.
+
+1. 짧은 트랜잭션에서 결제를 잠그고 `PROCESSING`으로 저장
+2. 트랜잭션 밖에서 PG 승인 API 호출
+3. 새 트랜잭션에서 승인 결과, `payment_history`, `payment_api_log` 저장
+
+메서드 전체에 `@Transactional`을 붙이면 PG 응답을 기다리는 동안 잠금이 유지됩니다. `transactionTemplate`은 한 서비스 안에서 이 경계를 명시하려고 선택한 방식입니다. 별도 트랜잭션 서비스로 분리해 `@Transactional`을 적용하는 것도 가능합니다.
+
+다만 **PG 승인과 DB 저장은 하나의 트랜잭션이 될 수 없어서**, 승인 후 DB 저장이 실패한 경우에는 결제 조회로 결과를 확인하는 복구 처리가 필요합니다.
+
+===== 2026-11-12 14:55 (Asia/Seoul) =====
+
+사용자:
+아 그니까   Transactional 사용하면 클래스 분리랑 락도 관리가 안되니까 간편하게 저걸로 한거임?
+
+AI:
+네, **트랜잭션 경계를 한 서비스 안에서 나누기 편해서** `TransactionTemplate`을 쓴 겁니다. 다만 **`@Transactional`로 락 관리가 안 되는 건 아닙니다.** 락은 두 방식 모두 트랜잭션이 끝날 때 해제됩니다.
+
+`@Transactional`로 같은 흐름을 만들려면 승인 전 저장과 승인 후 저장을 **별도 Bean의 메서드**로 분리해야 합니다. 같은 클래스 안에서 그 메서드를 직접 호출하면 Spring의 트랜잭션 프록시가 적용되지 않기 때문입니다. `TransactionTemplate`은 그 클래스 분리 없이 각 DB 작업 구간만 감쌉니다.
+
+===== 2026-11-12 14:57 (Asia/Seoul) =====
+
+사용자:
+이거 register에 transactionTemplate쓸 이유가 없잖아
+
+AI:
+맞습니다. `register`는 PG 호출 없이 결제와 이력만 저장하므로 `TransactionTemplate`이 필요 없습니다. 해당 메서드는 `@Transactional`로 바꾸고, 승인 메서드의 분리된 트랜잭션은 유지하겠습니다.
+
+AI:
+맞습니다. `register`는 결제와 생성 이력을 한 번에 저장하므로 `TransactionTemplate`을 쓸 이유가 없습니다.
+
+[PaymentService.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/service/PaymentService.java:50)의 `register`를 `@Transactional`로 바꿨습니다. PG 호출 전후로 트랜잭션을 나눠야 하는 `payment` 쪽만 `TransactionTemplate`을 유지했습니다. `git diff --check`는 통과했고, 컴파일은 앞서 발생한 Gradle loopback 오류로 확인하지 못했습니다.
+
+===== 2026-11-12 15:33 (Asia/Seoul) =====
+
+사용자:
+이거 `TransactionTemplate`  쓰지말고 그냥 기존 방식대로 클래스 분리로 할까? PaymentTransactionService하나 만들어서
+
+AI:
+네, 지금은 클래스 분리가 더 읽기 쉽겠습니다. `PaymentService`는 PG 호출 흐름을 맡고, 새 `PaymentTransactionService`가 준비·승인 전 상태·승인 결과·실패 결과를 각각 `@Transactional` 메서드로 저장하도록 바꾸겠습니다.
+
+AI:
+현재 `PaymentService`의 준비·상태 변경·이력·API 로그 저장을 `PaymentTransactionService`로 옮기겠습니다. PG 네트워크 호출과 완료 이벤트 발행은 `PaymentService`에 남겨, 트랜잭션이 끝난 뒤 실행되도록 하겠습니다.
+
+AI:
+`PaymentTransactionService`로 DB 작업을 옮겼습니다. `PaymentService`는 PG 호출 전후에 해당 Bean의 `@Transactional` 메서드를 호출하고, 완료 메서드가 커밋된 다음 이벤트를 발행합니다. 기존 통합테스트가 이 트랜잭션 경계를 그대로 검증하는지도 확인하겠습니다.
+
+AI:
+네. `TransactionTemplate`을 제거하고 클래스를 분리했습니다.
+
+- [PaymentService.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/service/PaymentService.java:35): 결제 흐름과 PG 호출을 담당합니다. DB 작업은 별도 Bean에 위임하고, 결과 저장이 커밋된 뒤 이벤트를 발행합니다.
+- [PaymentTransactionService.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/service/PaymentTransactionService.java:42): 준비, 승인 전 상태, 승인 결과, 실패 결과를 각각 `@Transactional` 메서드로 저장합니다.
+- [PaymentFlowIntegrationTest.java](C:/practice/paymentModule/src/test/java/com/paymentModule/domain/payment/PaymentFlowIntegrationTest.java:138): PG 호출 시 트랜잭션이 열려 있지 않은지 확인하는 검증을 추가했습니다.
+- [AGENTS.md](C:/practice/paymentModule/AGENTS.md:130): 합의한 트랜잭션 경계를 기록했습니다.
+
+`git diff --check`는 통과했습니다. 테스트는 Gradle의 loopback 연결 오류로 실행하지 못했습니다.

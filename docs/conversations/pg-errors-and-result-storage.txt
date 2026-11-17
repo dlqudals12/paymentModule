@@ -1,0 +1,286 @@
+PG 오류와 결과 저장
+
+관련 수정 내용에 대한 사용자·AI 대화 원문 발췌입니다.
+서로 다른 시점의 관련 대화를 이어서 표시했습니다. 비속어만 삭제했고, 도구 실행 내역은 제외했습니다.
+
+===== 2026-11-13 17:01 (Asia/Seoul) =====
+
+사용자:
+그 다음 Exception에 대해서 생각을 할거야 PaymentExternalException을 두고 안에 필드에 PaymentStatus와 HttpStatus약간 response에 기본 exception은 409인데 타입으로 외부 api에서 어떤 에러가 났는지 보고  api error 메세지까지 해서 필드 추가 해서 할거야 어때?
+
+AI:
+현재 토스 API 오류가 `PaymentProcessResult`와 HTTP 응답까지 어떻게 전달되는지 확인한 뒤, `PaymentExternalException`에 담을 필드와 409 응답 기준을 제안할게요.
+
+AI:
+방향은 좋아. `PaymentExternalException`에 **결제 상태와 PG 오류 정보를 함께 담으면**, 호출자가 실패와 결과 미확인을 구분하기 쉬워져.
+
+다만 **모든 예외의 기본 HTTP 응답을 409로 두는 건 반대야.** 409는 같은 주문의 다른 결제 키나 아직 결과를 확인 중인 경우처럼 충돌을 나타낼 때 맞아. PG가 승인을 거절한 경우와 통신 장애는 구분해야 해.
+
+필드도 두 종류의 HTTP 상태를 명확히 나누는 게 좋아.
+
+- `paymentStatus`: 우리 DB에 기록한 `FAILED` 또는 `UNKNOWN`
+- `responseStatus`: 클라이언트에 반환할 HTTP 상태
+- `providerHttpStatus`: PG가 실제 반환한 상태. 응답을 못 받았으면 `null`
+- `providerCode`, `providerMessage`: PG 오류 원인
+- 예외의 `message`: 클라이언트에 보여줄 안전한 문구
+
+현재 `PaymentProcessResult`에 PG 상태·코드·메시지가 이미 있으니, **결과를 DB에 저장한 뒤 예외를 만들어 던지는 흐름**이 자연스러워. 특히 `UNKNOWN`은 승인 실패로 단정하면 안 되므로 409와 “결과 확인 중” 메시지를 주고, 같은 결제 키로 재조회하게 해야 해. 구현할 때는 이 예외를 HTTP 응답으로 변환할 핸들러도 필요해.
+
+===== 2026-11-13 17:05 (Asia/Seoul) =====
+
+사용자:
+일단 409로 모두 하고 PaymentException 타입에 따라 분류하면 되지 일단 전체의 성격은 409이고 어떤 에러인지가 중요한거니까 그리고 PaymentProcessor의 작업은 api에 대한 결과와 헨들링 약간 두고 그 외부에서 try catch로 받은 다음 그 결과에 따라 PaymentService쪽에서 db작업 하는거지
+
+AI:
+맞아. 이 모듈에서는 **클라이언트 응답은 409로 통일하고, `PaymentException`의 타입으로 오류 원인을 구분**하는 설계로 가면 돼. 내가 앞서 HTTP 상태를 나누자고 한 건 네가 정한 응답 방식과 달랐어.
+
+역할도 네 설명대로야.
+
+1. `PaymentProcessor`가 PG 응답을 해석해 오류 타입, `PaymentStatus`, PG HTTP 상태·코드·메시지를 담은 예외를 던진다.
+2. `PaymentService`가 그 예외를 받아 **승인 요청인지 결과 조회인지에 맞게** 결제 상태·이력·API 로그를 저장한다. 결과를 확정할 수 없는 조회라면 상태는 유지한다.
+3. DB 작업이 커밋된 뒤 예외를 다시 전달하고, 응답 처리부가 타입과 메시지를 담아 409로 반환한다.
+
+구현할 때 기존의 `catch (RuntimeException)`보다 `PaymentException`을 먼저 잡아야 해. 그렇지 않으면 PG가 명시한 실패도 현재의 일반 예외 처리처럼 `UNKNOWN`으로 기록될 수 있어.
+
+===== 2026-11-13 17:06 (Asia/Seoul) =====
+
+사용자:
+봐봐 이렇게 하면 PaymentException이랑 그 이외의 exception에 따라 간단하게 로직을 다르게 관리할 수 있어 왜냐하면 pg사가 다른거지 거기에서 넣어준 정보로 같은 db를 수정하는거잖아
+
+AI:
+맞아. 핵심은 **PG마다 다른 오류 응답을 `PaymentProcessor`에서 공통 `PaymentException`으로 변환**하는 거야. 그러면 `PaymentService`는 어느 PG인지 몰라도 예외에 담긴 `PaymentStatus`, 오류 타입, 코드와 메시지로 같은 결제 테이블·이력·API 로그를 처리할 수 있어.
+
+`PaymentException`은 PG가 해석 가능한 결과를 준 경우로, 그 외 예외는 통신이나 처리 중 결과를 확정할 수 없는 경우로 나누면 흐름도 단순해져. 다만 PG 응답을 받았더라도 승인 여부가 불명확한 경우가 있으니, **예외 종류만으로 성공·실패를 단정하지 않고 예외에 담긴 `PaymentStatus`를 기준으로 저장**하면 돼.
+
+===== 2026-11-13 17:07 (Asia/Seoul) =====
+
+사용자:
+PaymentStatus에 따라 exception에 object를 넣어서 줘도 되고 그 object만 JsonIgnore하면 되잖아
+
+AI:
+응, 그게 더 간단해. `PaymentException`에 `PaymentProcessResult` 객체를 넣으면 `PaymentService`가 그 안의 `PaymentStatus`, PG HTTP 상태, 코드, 메시지를 꺼내 공통 DB 처리에 사용할 수 있어. PG별 변환은 `PaymentProcessor` 안에서 끝나고.
+
+그 객체를 응답에 노출하지 않으려면 `@JsonIgnore`를 붙일 수 있어. 다만 예외를 그대로 JSON으로 반환하지 않고 응답 처리부에서 필요한 필드만 담아 409 응답을 만들면, `@JsonIgnore` 없이도 노출을 제어할 수 있어.
+
+===== 2026-11-13 17:08 (Asia/Seoul) =====
+
+사용자:
+왜냐아면 성공 아니면 무조건 오류라고 봐야지 아니면 FAIL이면 일단 response는 오는거니까 PaymentService에서 if문으로 또 판단할래?
+
+AI:
+맞아. **PG 승인 실패를 `PaymentProcessResult`로 반환하고 `PaymentService`에서 다시 `FAILED`인지 검사할 필요는 없어.** `PaymentProcessor`가 실패나 결과 미확인을 해석해 `PaymentException`을 던지고, 서비스는 그 예외의 결과 객체로 DB 작업을 하면 돼.
+
+다만 현재 가상계좌의 `WAITING_FOR_DEPOSIT`처럼 **PG 호출은 정상이고 결제만 진행 중인 응답**은 오류가 아니야. 그 경우는 `PROCESSING` 결과를 반환하면 된다. 즉, 처리기에서 정상 진행 결과는 반환하고 오류 결과는 예외로 분기하는 구조가 맞아.
+
+===== 2026-11-13 17:09 (Asia/Seoul) =====
+
+사용자:
+내가 두가지 경우를 제시한거 맞지?
+
+AI:
+맞아. 네가 제시한 건 두 방식이야.
+
+1. `PaymentProcessor`가 실패 결과를 `PaymentException`에 담아 던지고, `PaymentService`가 예외를 받아 DB를 처리한다.
+2. `PaymentProcessor`가 실패 결과도 반환하고, `PaymentService`가 `if`로 상태를 검사해 DB를 처리한다.
+
+네가 원하는 건 **1번**이고, 내가 앞서 설명하면서 두 방식을 섞었어.
+
+===== 2026-11-13 17:09 (Asia/Seoul) =====
+
+사용자:
+아니 일단 try catch의 흐름은 다 같아 그 다음이 문제인거임 PaymentType의 처리야
+
+AI:
+내가 예외 흐름과 결제 유형 처리를 섞어 이해했어. 코드의 `PaymentType`이 무엇을 구분하는지 확인하고, 네가 말한 두 경우를 그 기준으로 다시 정리할게.
+
+AI:
+내가 또 잘못 짚었어. **`try/catch` 흐름은 두 경우 모두 같고, 그다음 `PaymentType`을 어떻게 처리할지가 네 질문**이야.
+
+현재 코드의 `PaymentType`은 `ONE_TIME`과 `SUBSCRIPTION`이고, `ready`에서는 `ONE_TIME`으로 고정해 저장하고 있어. 네가 말한 타입이 이 결제 유형을 뜻하는 거야, 아니면 `PaymentException`에 넣을 **오류 타입**을 뜻하는 거야? 그 둘은 처리 위치가 달라서 여기만 정확히 맞추고 싶어.
+
+===== 2026-11-13 17:10 (Asia/Seoul) =====
+
+사용자:
+api호출 이후에 에러는 일단 PaymentException으로 다 던지잖아 근데 PaymentType이 성공이 아닌건 일단 api적으로 볼 때는 오류는 아니라는 거지 그래서 그 부분에서 성공이 아니면 return을 할지 PaymentException으로 넘길징의 ㅊ차이지
+
+AI:
+이제 이해했어. 여기서 말한 `SUCCESS` 여부는 코드상 `PaymentType`이 아니라 **`PaymentStatus`**의 처리야. PG API 호출 자체는 성공했는데 결제 상태가 `PROCESSING`처럼 완료 전일 수 있다는 뜻이지.
+
+나는 그 경우 **`PaymentProcessResult`를 반환**하는 게 맞다고 봐. `PaymentException`은 PG API 오류나 통신 오류에 사용하고, 정상 응답에 담긴 결제 상태는 결과로 전달하는 거야. `PaymentService`에서 상태별 `if`를 반복하고 싶지 않다면 `PaymentTransactionService`가 결과를 받아 상태·이력·로그를 저장하도록 모으면 돼. 서비스는 저장된 결과가 `SUCCESS`일 때만 완료 이벤트를 발행하면 되고.
+
+===== 2026-11-13 17:12 (Asia/Seoul) =====
+
+사용자:
+그러면 일단 try catch로 한다 try catch에서는 API적으로만 봤을때 오류인 것만 잡는다 이후 결제상태가 존재하는 경우는 return을 해서 분기를 한다 근데 그 분기는 try catch를 벗어나지 않는다
+
+AI:
+맞아. **PG 호출과 반환된 결제 상태의 분기를 같은 `try` 안에서 처리**하고, `catch`는 PG API 관점의 오류인 `PaymentException`만 처리하는 흐름이야.
+
+```java
+try {
+    PaymentProcessResult result = processor.payment(payment, request);
+
+    // 정상 API 응답에 담긴 결제 상태를 처리
+    // SUCCESS, PROCESSING 등
+} catch (PaymentException exception) {
+    // PG API 오류 정보를 이용해 DB 기록
+}
+```
+
+이때 `try` 전체를 `catch (RuntimeException)`으로 잡으면 상태 저장이나 이벤트 발행 중 생긴 예외까지 PG API 오류로 오인할 수 있어. 그 부분만 주의하면 네가 말한 경계가 명확해져.
+
+===== 2026-11-13 17:13 (Asia/Seoul) =====
+
+사용자:
+그리고 catch에 하나 더 추가해야지 이외의 exception모두
+
+AI:
+맞아. `PaymentException`을 먼저 잡고, 그 외 예외를 잡는 `catch (Exception)`이 하나 더 필요해. 전자는 PG가 전달한 상태·코드로 처리하고, 후자는 승인 결과를 알 수 없으므로 `UNKNOWN`으로 기록하는 흐름이야.
+
+다만 상태 분기도 같은 `try`에 있으면 DB 저장 중 발생한 예외까지 두 번째 `catch`에 들어가. **PG 호출에만 안쪽 `try/catch`를 두고, 반환된 상태 분기는 바깥 `try` 안에 두면** 네가 원하는 흐름을 유지하면서 오류 원인도 구분할 수 있어.
+
+===== 2026-11-13 17:14 (Asia/Seoul) =====
+
+사용자:
+```java
+try {
+    PaymentProcessResult result = processor.payment(payment, request);
+
+    // 정상 API 응답에 담긴 결제 상태를 처리
+    // SUCCESS, PROCESSING 등
+} catch (PaymentException pe) {
+    // PG API 오류 정보를 이용해 DB 기록
+} catch (Exception e) {
+}
+```
+
+
+
+
+
+이런식으로 수정 ㄱㄱ
+
+AI:
+제시한 `try/catch` 구조로 바꾸겠습니다. PG API 오류는 `PaymentException`으로, 그 밖의 예외는 별도 `catch`로 처리하고, 정상 응답의 결제 상태 분기는 `try` 안에 두겠습니다. 먼저 현재 테스트와 예외 응답 방식을 확인할게요.
+
+AI:
+정상적인 PG 응답에 담긴 결제 상태는 반환하고, PG API 오류만 `PaymentException`으로 던지도록 처리기를 바꾸겠습니다. 서비스에서는 `PaymentException`과 그 외 예외를 따로 잡되, 정상 응답 뒤 DB 처리에서 난 예외를 PG 통신 오류로 기록하지 않도록 구분하겠습니다.
+
+사용자:
+야 잠깐 exception 위치 머야
+
+AI:
+잠깐 멈출게. 방금 만든 파일은 [PaymentException.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/exception/PaymentException.java:1), 패키지는 `com.paymentModule.domain.payment.exception`이야. 결제 전용 예외라 그 위치에 뒀는데, 네가 생각한 위치와 다르면 그 기준에 맞춰 옮길게. 현재 수정은 아직 진행 중이고 테스트는 실행하지 않았어.
+
+AI:
+예외 파일은 [PaymentException.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/exception/PaymentException.java:1)에 만들었어. `domain.payment.exception` 패키지야. 지금 작업은 멈췄고, 서비스 수정은 일부만 적용된 상태야.
+
+===== 2026-11-13 17:16 (Asia/Seoul) =====
+
+사용자:
+그리고 extends BusinessException이지
+
+AI:
+맞아. `PaymentException`을 기존 `BusinessException`을 상속하도록 바꾸고 `global.exception` 패키지로 옮기겠습니다. 409 응답과 PG 오류 정보가 실제 API 응답까지 전달되도록 연결한 다음, 남은 `try/catch` 수정도 마무리할게요.
+
+사용자:
+Response code로 409 만들고
+
+사용자:
+기본적인 구조는 따라가자 좀
+
+AI:
+확인했어. 기존 방식에 맞춰 `ResponseCode`에 409 항목을 추가하고, `PaymentException`은 `BusinessException`을 상속하게 바꿀게. PG 메시지는 기존 `BusinessException`의 코드·메시지 필드에 담겠습니다.
+
+사용자:
+우리 프로젝트에 exception handler 없었음>?
+
+AI:
+기존 `src/main`에서는 `@ControllerAdvice`나 `@ExceptionHandler` 구현을 찾지 못했어. `BusinessException`과 `DataNotFountException` 클래스만 있었고, 이번 작업 중에 내가 `PaymentExceptionHandler`를 새로 추가했어. 지금은 기존 구조에 맞게 409 응답을 처리할 방법을 확인하는 단계야.
+
+AI:
+예외는 `global.exception`의 `BusinessException` 구조와 `ResponseCode` 409 항목에 맞췄습니다. 토스 처리기는 API 오류를 `PaymentException`으로 던지고, 정상 응답의 결제 상태는 서비스가 `try` 안에서 처리합니다. 이제 관련 테스트를 실행해볼게요.
+
+AI:
+테스트는 Gradle이 `Unable to establish loopback connection` 오류로 빌드를 시작하지 못해 실행 결과를 확인하지 못했어. 코드상으로는 기존 `BusinessException` 상속과 `ResponseCode` 409를 적용했고, 변경된 호출 지점과 테스트 기대값을 마지막으로 점검 중이야.
+
+AI:
+요청한 `try/catch` 흐름으로 수정했어. [PaymentService.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/service/PaymentService.java:88)에서 PG 정상 응답의 결제 상태는 `try` 안에서 처리하고, `PaymentException`과 그 외 예외를 각각 잡아 DB 기록 방식을 구분해. 정상 응답 뒤 DB 처리에서 난 예외는 PG 오류로 다시 기록하지 않도록 했어.
+
+- [PaymentException.java](C:/practice/paymentModule/src/main/java/com/paymentModule/global/exception/PaymentException.java:14)는 기존 `BusinessException`을 상속하고 PG 결과 객체를 보관해.
+- [ResponseCode.java](C:/practice/paymentModule/src/main/java/com/paymentModule/data/enums/ResponseCode.java:11)에 409를 추가했어. 기존에 예외 핸들러는 없어서 [PaymentExceptionHandler.java](C:/practice/paymentModule/src/main/java/com/paymentModule/global/exception/PaymentExceptionHandler.java:14)를 추가해 PG 코드·메시지를 409 응답으로 반환하게 했어.
+- [TossPaymentProcessor.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/processor/TossPaymentProcessor.java:108)는 PG API 오류를 `PaymentException`으로 던지고, 결제 상태가 담긴 정상 응답은 반환해. 관련 테스트 기대값도 수정했어.
+
+`git diff --check`는 통과했어. 테스트는 Gradle의 `Unable to establish loopback connection` 오류로 시작되지 못해 통과 여부는 확인하지 못했어. 커밋과 push는 하지 않았어.
+
+===== 2026-11-13 17:34 (Asia/Seoul) =====
+
+사용자:
+야 catch에 왜 변수명이 다 같아
+
+AI:
+맞아. `PaymentException`과 일반 예외를 다른 이름으로 구분해야 읽기 쉬워. 두 `try/catch`의 변수명을 각각 `paymentException`, `unexpectedException`으로 바꾸겠습니다.
+
+AI:
+맞아. [PaymentService.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/service/PaymentService.java:112)의 승인·조회 `catch`에서 `PaymentException`은 `paymentException`, 그 외 예외는 `unexpectedException`으로 구분해 수정했어. `git diff --check`도 통과했어.
+
+===== 2026-11-13 17:36 (Asia/Seoul) =====
+
+사용자:
+그리고 코드에 주석은 기본적으로 다 넣어야지
+
+AI:
+맞아. 이번에 바꾼 예외 처리 코드에서 설명이 빠진 부분을 확인하고, 메서드 목적과 상태별 처리 이유가 바로 보이도록 주석을 보강하겠습니다.
+
+AI:
+이번에 수정한 예외 처리 코드에 주석을 보강했어.
+
+- [PaymentService.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/service/PaymentService.java:88): 정상 응답과 예외를 구분하는 이유, 상태별 DB 처리와 조회 복구 기준을 설명했어.
+- [TossPaymentProcessor.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/processor/TossPaymentProcessor.java:105): PG 오류를 예외로 전달할 때 `UNKNOWN`과 결제 부재를 구분하는 이유를 적었어.
+- [PaymentException.java](C:/practice/paymentModule/src/main/java/com/paymentModule/global/exception/PaymentException.java:16), [PaymentExceptionHandler.java](C:/practice/paymentModule/src/main/java/com/paymentModule/global/exception/PaymentExceptionHandler.java:21): PG 결과 보관과 409 응답의 기본값 처리 이유를 적었어.
+
+`git diff --check`는 통과했어. 이번에는 주석만 추가해 테스트는 다시 실행하지 않았어.
+
+===== 2026-11-13 17:40 (Asia/Seoul) =====
+
+사용자:
+궁금한게 성공할때랑 실패할때랑 저장하는 테이블이 달라?
+
+AI:
+아니, **확정된 성공과 실패는 같은 테이블 3개에 저장해.**
+
+| 테이블 | 성공 | 확정된 실패 |
+| --- | --- | --- |
+| `payment` | `SUCCESS`와 승인 정보 갱신 | `FAILED`와 오류 정보 갱신 |
+| `payment_history` | 성공 이력 추가 | 실패 이력 추가 |
+| `payment_api_log` | PG 호출 결과 추가 | PG 호출 오류 결과 추가 |
+
+차이는 **결과를 확정할 수 없는 조회**야. 이때는 기존 `payment` 상태를 유지하고 `payment_api_log`에 조회 결과만 남겨. 최초 승인 호출의 결과가 불명확하면 `payment`를 `UNKNOWN`으로 바꾸고 이력도 남겨.
+
+===== 2026-11-13 17:41 (Asia/Seoul) =====
+
+사용자:
+그러면 저장하는거 메소드 하나로 해도 되잖아 Exception은 성공이면 null로 넘기고
+
+AI:
+맞아. `updateResult()`와 `writeUnsuccessfulResult()`는 **하나의 저장 메서드로 통합할 수 있어.** `PaymentProcessResult.status`에 따라 `payment`와 `payment_history`를 처리하고, `payment_api_log`는 공통으로 저장하면 돼.
+
+`Exception`은 성공 시 `null`로 넘겨도 돼. 다만 **`null`을 성공 판정 기준으로 쓰면 안 돼.** 정상 API 응답에도 `PROCESSING`이나 실패 상태가 있을 수 있고, 결과가 불확실한 조회는 로그만 저장해야 해. 결제 상태의 판단은 `result.status`, 예외는 오류 원인 기록에 사용하는 구조가 맞아.
+
+===== 2026-11-13 17:41 (Asia/Seoul) =====
+
+사용자:
+ㄱㄱ
+
+AI:
+두 저장 메서드를 하나로 합치겠습니다. `PaymentProcessResult.status`로 상태 전이를 결정하고, `Exception`은 API 로그의 오류 원인에만 사용하겠습니다. 결과가 불확실한 조회에서 상태를 유지하는 동작과 PG 호출 뒤 트랜잭션 경계도 확인하며 수정할게요.
+
+AI:
+저장 경로를 `writeResult()` 하나로 합쳤습니다. 성공·대기·실패 확정은 상태에 맞게 이력을 남기고, 결과가 불확실한 조회는 API 로그만 저장합니다. `PaymentException`을 넘겨도 로그에는 예외 클래스명보다 PG 오류 코드가 남도록 유지했습니다.
+
+AI:
+`updateResult()`와 `writeUnsuccessfulResult()`를 [PaymentTransactionService.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/service/PaymentTransactionService.java:143)의 `writeResult()` 하나로 통합했어. 상태에 따라 결제와 이력을 저장하고, 결과를 확정할 수 없는 조회는 상태를 유지한 채 API 로그만 남겨.
+
+[PaymentService.java](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/service/PaymentService.java:101)의 호출도 모두 바꿨어. 성공 결과에는 `Exception`을 `null`로 넘기고, 예외가 있으면 로그 원인으로 사용해. PG가 제공한 오류 코드는 [API 로그 저장 부분](C:/practice/paymentModule/src/main/java/com/paymentModule/domain/payment/service/PaymentTransactionService.java:311)에서 유지해.
+
+`git diff --check`는 통과했어. 테스트는 Gradle의 `Unable to establish loopback connection` 오류로 시작되지 못해 통과 여부를 확인하지 못했어. 커밋·push는 하지 않았어.
