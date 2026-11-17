@@ -136,10 +136,10 @@ public class Payment extends BaseEntity {
     }
 
     /**
-     * 가상계좌 입금 대기처럼 인증은 되었지만 결제가 아직 완료되지 않은 상태를 기록한다.
+     * PG가 정상적으로 접수했지만 결제 완료를 기다리는 상태를 기록한다.
      */
-    public void pending(String transactionId, PaymentMethod paymentMethod) {
-        updatePaymentStatus(PaymentStatus.PROCESSING);
+    public void pending(PaymentStatus status, String transactionId, PaymentMethod paymentMethod) {
+        updatePaymentStatus(status);
         this.transactionId = transactionId;
         this.paymentMethod = paymentMethod;
     }

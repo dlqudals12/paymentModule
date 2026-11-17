@@ -125,7 +125,8 @@ public class PaymentTransactionService {
         Payment current = verifiedPayment(request, user.getId());
 
         boolean unresolved = current.getPaymentStatus() == PaymentStatus.PROCESSING
-                || current.getPaymentStatus() == PaymentStatus.UNKNOWN;
+                || current.getPaymentStatus() == PaymentStatus.UNKNOWN
+                || current.getPaymentStatus() == PaymentStatus.WAITING_FOR_PAYMENT;
 
         //미확정 시도는 최초 승인에 사용한 결제 키로만 복구할 수 있다.
         if (unresolved
@@ -143,10 +144,16 @@ public class PaymentTransactionService {
     public PaymentResponse writeResult(Payment previous, PaymentProcessor processor, PaymentProcessResult result,
                                        PaymentApiType apiType, LocalDateTime requestedAt,
                                        long durationMs, Exception exception, boolean updateStatus) {
-        CustomUserDetail user = AuthUtil.authentication();
+        //사용자 API는 앞 단계에서 소유자를 확인한다. 스케줄러도 호출할 수 있도록 결제 PK로 잠근다.
+        Payment current = paymentRepository.findLockedById(previous.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "결제를 찾을 수 없습니다."));
 
-        //PG 호출 전 엔티티 대신 현재 결제 행을 잠그고 다시 조회한다.
-        Payment current = payment(previous.getProvider(), previous.getOrderId(), user.getId());
+        //PG 조회 도중 다른 결제 시도로 바뀌었다면 오래된 조회 결과를 반영하지 않는다.
+        if (!Objects.equals(current.getProvider(), previous.getProvider())
+                || !Objects.equals(current.getOrderId(), previous.getOrderId())
+                || !Objects.equals(current.getTransactionId(), previous.getTransactionId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 정보가 변경되었습니다.");
+        }
 
         if (updateStatus && current.getPaymentStatus() == PaymentStatus.SUCCESS
                 && result.getStatus() == PaymentStatus.SUCCESS
@@ -156,9 +163,25 @@ public class PaymentTransactionService {
             return PaymentResponse.of(current);
         }
 
+        //동시 조회에서 이미 반영한 대기 상태는 이력을 중복 기록하지 않는다.
+        if (updateStatus && apiType == PaymentApiType.PAYMENT_LOOKUP
+                && current.getPaymentStatus() == result.getStatus()
+                && (result.getStatus() == PaymentStatus.PROCESSING
+                || result.getStatus() == PaymentStatus.WAITING_FOR_PAYMENT)) {
+            updateStatus = false;
+        }
+
+        //오래된 조회가 뒤늦게 끝나도 확인된 결제 대기를 다시 처리 중으로 되돌리지 않는다.
+        if (updateStatus && current.getPaymentStatus() == PaymentStatus.WAITING_FOR_PAYMENT
+                && result.getStatus() == PaymentStatus.PROCESSING) {
+            updateStatus = false;
+        }
+
         if (updateStatus) {
             PaymentStatus previousStatus = current.getPaymentStatus();
-            if (previousStatus != PaymentStatus.PROCESSING && previousStatus != PaymentStatus.UNKNOWN) {
+            if (previousStatus != PaymentStatus.PROCESSING
+                    && previousStatus != PaymentStatus.UNKNOWN
+                    && previousStatus != PaymentStatus.WAITING_FOR_PAYMENT) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 상태가 변경되었습니다.");
             }
 
@@ -169,8 +192,8 @@ public class PaymentTransactionService {
                     saveHistory(current, PaymentHistoryType.PAYMENT_SUCCEEDED,
                             previousStatus, result.getCode(), result.getMessage());
                 }
-                case PROCESSING -> {
-                    current.pending(result.getTransactionId(), result.getPaymentMethod());
+                case PROCESSING, WAITING_FOR_PAYMENT -> {
+                    current.pending(result.getStatus(), result.getTransactionId(), result.getPaymentMethod());
                     saveHistory(current, PaymentHistoryType.PAYMENT_PENDING,
                             previousStatus, result.getCode(), result.getMessage());
                 }
@@ -305,7 +328,8 @@ public class PaymentTransactionService {
                 .successYn(result.getHttpStatus() != null && result.getHttpStatus() >= 200
                         && result.getHttpStatus() < 300
                         && (result.getStatus() == PaymentStatus.SUCCESS
-                        || result.getStatus() == PaymentStatus.PROCESSING))
+                        || result.getStatus() == PaymentStatus.PROCESSING
+                        || result.getStatus() == PaymentStatus.WAITING_FOR_PAYMENT))
                 .durationMs(durationMs)
                 //PG가 제공한 오류 코드는 보존하고, 그 밖의 예외는 실제 예외 유형을 기록한다.
                 .errorType(exception == null || exception instanceof PaymentException

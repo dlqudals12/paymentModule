@@ -139,7 +139,7 @@ class TossPaymentProcessorTest {
                                 TossPaymentStatus.DONE)));
 
         PaymentProcessResult result = processor.lookup(payment("order_lookup_001", 1500L),
-                request("order_lookup_001", "payment_lookup_001", 1500L));
+                "payment_lookup_001");
 
         assertEquals(PaymentStatus.SUCCESS, result.getStatus());
         assertEquals("payment_lookup_001", result.getTransactionId());
@@ -159,7 +159,7 @@ class TossPaymentProcessorTest {
                                 TossPaymentStatus.DONE)));
 
         PaymentProcessResult result = processor.lookup(payment("order_lookup_mismatch_001", 1500L),
-                request("order_lookup_mismatch_001", "payment_lookup_mismatch_001", 1500L));
+                "payment_lookup_mismatch_001");
 
         assertEquals(PaymentStatus.UNKNOWN, result.getStatus());
         assertEquals("TOSS_RESULT_MISMATCH", result.getCode());
@@ -177,7 +177,7 @@ class TossPaymentProcessorTest {
 
         PaymentException exception = assertThrows(PaymentException.class,
                 () -> processor.lookup(payment("order_not_found_001", 1500L),
-                        request("order_not_found_001", "payment_not_found_001", 1500L)));
+                        "payment_not_found_001"));
         PaymentProcessResult result = exception.getResult();
 
         assertEquals(PaymentStatus.FAILED, result.getStatus());
@@ -196,7 +196,7 @@ class TossPaymentProcessorTest {
 
         PaymentException exception = assertThrows(PaymentException.class,
                 () -> processor.lookup(payment("order_lookup_error_001", 1500L),
-                        request("order_lookup_error_001", "payment_lookup_error_001", 1500L)));
+                        "payment_lookup_error_001"));
         PaymentProcessResult result = exception.getResult();
 
         assertEquals(PaymentStatus.UNKNOWN, result.getStatus());

@@ -42,4 +42,17 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
             @Param("beforeStatus") OrderStatus beforeStatus,
             @Param("pendingStatus") OrderStatus pendingStatus,
             @Param("cutoff") LocalDateTime cutoff);
+
+    /**
+     * 결제 키가 있고 상태 변경 후 유예 시간이 지난 미확정 결제를 모두 조회한다.
+     */
+    @Query("""
+            select payment from Payment payment
+            where payment.paymentStatus in :statuses
+              and payment.paymentStatusChangedAt < :cutoff
+              and payment.transactionId is not null
+            """)
+    List<Payment> findProcessingRecoveryCandidates(
+            @Param("statuses") List<PaymentStatus> statuses,
+            @Param("cutoff") LocalDateTime cutoff);
 }

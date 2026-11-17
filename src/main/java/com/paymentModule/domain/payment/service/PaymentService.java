@@ -20,10 +20,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -75,7 +75,7 @@ public class PaymentService {
                 throw exception;
             }
 
-            return recover(unresolved, processor, request);
+            return recover(unresolved, processor, request.getPaymentKey());
         }
 
         if (payment.getPaymentStatus() == PaymentStatus.SUCCESS) {
@@ -97,7 +97,8 @@ public class PaymentService {
 
             //HTTP 요청은 성공해도 결제 자체가 실패하거나 결과 미확인 상태일 수 있다.
             if (result.getStatus() != PaymentStatus.SUCCESS
-                    && result.getStatus() != PaymentStatus.PROCESSING) {
+                    && result.getStatus() != PaymentStatus.PROCESSING
+                    && result.getStatus() != PaymentStatus.WAITING_FOR_PAYMENT) {
                 paymentTransactionService.writeResult(payment, processor, result, PaymentApiType.PAYMENT,
                         requestedAt, elapsedMillis(startedAt), null, true);
 
@@ -108,7 +109,7 @@ public class PaymentService {
             PaymentResponse response = paymentTransactionService.writeResult(payment, processor,
                     result, PaymentApiType.PAYMENT, requestedAt, elapsedMillis(startedAt), null, true);
 
-            //입금 대기 중인 결제에는 완료 이벤트를 보내지 않는다.
+            //PG가 완료를 기다리는 결제에는 완료 이벤트를 보내지 않는다.
             if (response.getPaymentStatus() == PaymentStatus.SUCCESS) {
                 publishCompleted(response);
             }
@@ -146,9 +147,24 @@ public class PaymentService {
     }
 
     /**
-     * 처리 중이거나 결과 미확인 상태인 결제를 PG 조회로 확정한다.
+     * 스케줄러에서 저장된 결제 키로 미확정 결제의 PG 결과를 확인한다.
      */
-    private PaymentResponse recover(Payment payment, PaymentProcessor processor, PaymentRequest request) {
+    public PaymentResponse recover(Payment payment) {
+        return recover(payment, processor(payment.getProvider()), payment.getTransactionId());
+    }
+
+    /**
+     * 사용자 재요청과 스케줄러가 같은 PG 조회 및 결과 저장 흐름을 사용한다.
+     */
+    private PaymentResponse recover(Payment payment, PaymentProcessor processor, String paymentKey) {
+        return recover(payment, processor, paymentKey, recoveryProperties.getNotFoundRetryCount());
+    }
+
+    /**
+     * 결제 부재 404만 제한된 횟수로 다시 조회하고, 각 PG 호출은 별도 로그로 남긴다.
+     */
+    private PaymentResponse recover(Payment payment, PaymentProcessor processor,
+                                    String paymentKey, int remainingRetries) {
         //최초 승인에 사용한 결제 키로 PG를 다시 조회하고 통신 시간을 별도로 기록한다.
         LocalDateTime requestedAt = LocalDateTime.now();
         long startedAt = System.nanoTime();
@@ -156,7 +172,8 @@ public class PaymentService {
         //조회 뒤 발생한 DB 예외를 PG 조회 예외와 구분한다.
         boolean apiResultReceived = false;
         try {
-            PaymentProcessResult result = Objects.requireNonNull(processor.lookup(payment, request));
+            PaymentProcessResult result = Objects.requireNonNull(processor.lookup(payment, paymentKey));
+
             Objects.requireNonNull(result.getStatus(), "PG 조회 결과에 상태가 없습니다.");
 
             apiResultReceived = true;
@@ -181,14 +198,19 @@ public class PaymentService {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, result.getMessage());
             }
 
-            //정상 조회 응답이 아직 진행 중이거나 불확실하면 결제 상태는 유지한다.
+            //PG가 정상 대기 상태를 확인했다면 기존의 결과 미확인 상태도 대기로 확정한다.
+            if (result.getStatus() == PaymentStatus.PROCESSING
+                    || result.getStatus() == PaymentStatus.WAITING_FOR_PAYMENT) {
+                boolean statusChanged = payment.getPaymentStatus() != result.getStatus()
+                        && payment.getPaymentStatus() != PaymentStatus.WAITING_FOR_PAYMENT;
+
+                return paymentTransactionService.writeResult(payment, processor, result,
+                        PaymentApiType.PAYMENT_LOOKUP, requestedAt, durationMs, null, statusChanged);
+            }
+
+            //조회 결과가 불확실하면 실제 PG 통신만 기록하고 기존 결제 상태를 유지한다.
             paymentTransactionService.writeResult(payment, processor, result,
                     PaymentApiType.PAYMENT_LOOKUP, requestedAt, durationMs, null, false);
-            //기존에도 처리 중이었다면 재진입 요청에 현재 상태를 그대로 반환한다.
-            if (result.getStatus() == PaymentStatus.PROCESSING
-                    && payment.getPaymentStatus() == PaymentStatus.PROCESSING) {
-                return PaymentResponse.of(payment);
-            }
 
             throw new ResponseStatusException(HttpStatus.CONFLICT, "PG 결제 결과를 아직 확인할 수 없습니다.");
         } catch (PaymentException pe) {
@@ -198,23 +220,26 @@ public class PaymentService {
             }
 
             PaymentProcessResult result = pe.getResult();
-            //명시적인 결제 부재 404만 유예 시간 뒤 새 시도를 허용할 실패 후보로 본다.
+            //명시적인 결제 부재 404만 재조회하고, 다른 조회 오류는 기존 상태를 유지한다.
             boolean notFound = result.getStatus() == PaymentStatus.FAILED
                     && result.getHttpStatus() != null && result.getHttpStatus() == 404;
 
-            //최초 승인 요청이 아직 끝나지 않았을 수 있으므로 최근 404는 실패로 확정하지 않는다.
-            boolean recentNotFound = notFound && recentAttempt(payment);
-            //통신 오류와 유예 시간 안의 404는 API 로그만 남기고 결제 상태를 유지한다.
+            if (notFound && remainingRetries > 0) {
+                //이번 404는 기록하되 실패로 확정하지 않고, 정해진 간격 뒤 같은 결제 키를 재조회한다.
+                paymentTransactionService.writeResult(payment, processor, result,
+                        PaymentApiType.PAYMENT_LOOKUP, requestedAt, elapsedMillis(startedAt), pe, false);
+                waitBeforeNotFoundRetry();
+                return recover(payment, processor, paymentKey, remainingRetries - 1);
+            }
+
+            //재조회까지 모두 결제 부재이거나 PG가 확정 실패를 알린 경우에만 상태를 변경한다.
             boolean confirmedFailure = (result.getStatus() == PaymentStatus.FAILED
                     || result.getStatus() == PaymentStatus.CANCELLED
-                    || result.getStatus() == PaymentStatus.PARTIAL_CANCELLED) && !recentNotFound;
+                    || result.getStatus() == PaymentStatus.PARTIAL_CANCELLED);
 
             paymentTransactionService.writeResult(payment, processor, result,
                     PaymentApiType.PAYMENT_LOOKUP, requestedAt, elapsedMillis(startedAt), pe, confirmedFailure);
 
-            if (recentNotFound) {
-                throw new PaymentException(result, "결제 승인 결과를 확인하는 중입니다.");
-            }
             if (notFound) {
                 throw new PaymentException(result, "결제를 찾을 수 없습니다. 준비부터 다시 진행해 주세요.");
             }
@@ -241,15 +266,15 @@ public class PaymentService {
     }
 
     /**
-     * 최초 승인 요청이 아직 끝나지 않았을 수 있는 유예 시간인지 확인한다.
+     * 404 재조회 전 지정된 간격을 기다린다. 중단되면 결제 상태를 유지한다.
      */
-    private boolean recentAttempt(Payment payment) {
-        if (payment.getRequestedAt() == null) {
-            return true;
+    private void waitBeforeNotFoundRetry() {
+        try {
+            TimeUnit.MILLISECONDS.sleep(recoveryProperties.getNotFoundRetryDelayMs());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 조회 재시도가 중단되었습니다.", exception);
         }
-
-        return LocalDateTime.now().isBefore(payment.getRequestedAt()
-                .plus(Duration.ofMillis(recoveryProperties.getNotFoundGraceMs())));
     }
 
     /**

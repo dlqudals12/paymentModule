@@ -143,7 +143,7 @@ public class TossPaymentProcessor implements PaymentProcessor {
             // 입금 대기 상태는 결제 완료가 아니므로 이벤트를 발행하지 않는다.
             return PaymentProcessResult.builder()
                     .httpStatus(httpStatus)
-                    .status(PaymentStatus.PROCESSING)
+                    .status(PaymentStatus.WAITING_FOR_PAYMENT)
                     .transactionId(approved.getPaymentKey())
                     .paymentMethod(paymentMethod(approved.getMethod()))
                     .build();
@@ -171,8 +171,8 @@ public class TossPaymentProcessor implements PaymentProcessor {
      * 같은 결제 키로 토스 상태를 조회하고 저장된 주문 정보와 대조한다.
      */
     @Override
-    public PaymentProcessResult lookup(Payment payment, PaymentRequest request) {
-        TossApiResult<TossApiResponse> result = tossPaymentApi.paymentByKey(request.getPaymentKey());
+    public PaymentProcessResult lookup(Payment payment, String paymentKey) {
+        TossApiResult<TossApiResponse> result = tossPaymentApi.paymentByKey(paymentKey);
 
         //토스의 HTTP 응답이 없었던 오류는 내부 대체 상태 코드를 PG 응답으로 기록하지 않는다.
         Integer httpStatus = switch (result.getCode()) {
@@ -196,9 +196,10 @@ public class TossPaymentProcessor implements PaymentProcessor {
         }
 
         TossApiResponse response = result.getData();
+
         if (!payment.getOrderId().equals(response.getOrderId())
                 || !payment.getAmount().equals(response.getTotalAmount())
-                || !request.getPaymentKey().equals(response.getPaymentKey())) {
+                || !paymentKey.equals(response.getPaymentKey())) {
             return PaymentProcessResult.builder()
                     .httpStatus(httpStatus)
                     .status(PaymentStatus.UNKNOWN)
@@ -209,6 +210,7 @@ public class TossPaymentProcessor implements PaymentProcessor {
 
         PaymentStatus status = response.getStatus() == null
                 ? PaymentStatus.UNKNOWN : response.getStatus().getPaymentStatus();
+
         if (status == PaymentStatus.READY) {
             status = PaymentStatus.PROCESSING;
         }

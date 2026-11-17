@@ -9,6 +9,7 @@ public enum PaymentStatus {
     BEFORE("결제 전", null),
     READY("결제 준비", null),
     PROCESSING("결제 처리 중", null),
+    WAITING_FOR_PAYMENT("결제 완료 대기", null),
     SUCCESS("결제 성공", null),
     FAILED("결제 실패", PaymentHistoryType.PAYMENT_FAILED),
     UNKNOWN("결제 결과 미확인", PaymentHistoryType.PAYMENT_UNKNOWN),

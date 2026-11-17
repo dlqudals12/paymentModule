@@ -39,7 +39,8 @@ jwt:
 
 payments:
   recovery:
-    not-found-grace-ms: 600000
+    not-found-retry-delay-ms: 5000
+    not-found-retry-count: 2
   toss:
     client-key: ${TOSS_CLIENT_KEY:}
     secret-key: ${TOSS_SECRET_KEY:}
@@ -55,6 +56,10 @@ payments:
 schedule:
   payments:
     order:
+      retry-delay-ms: 300000
+      retry-initial-delay-ms: 60000
+      retry-min-age-ms: 600000
+    processing:
       retry-delay-ms: 300000
       retry-initial-delay-ms: 60000
       retry-min-age-ms: 600000

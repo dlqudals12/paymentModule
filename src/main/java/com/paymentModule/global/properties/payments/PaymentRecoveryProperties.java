@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 진행 중인 PG 요청을 조회했을 때 미조회 결과를 확정하기까지의 유예 시간을 관리한다.
+ * PG 결제 조회에서 결제 부재 404를 재확인하는 횟수와 간격을 관리한다.
  */
 @ConfigurationProperties("payments.recovery")
 @Getter
@@ -14,5 +14,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class PaymentRecoveryProperties {
 
-    private long notFoundGraceMs;
+    private long notFoundRetryDelayMs;
+    private int notFoundRetryCount;
 }

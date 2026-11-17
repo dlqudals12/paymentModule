@@ -12,7 +12,7 @@ import lombok.RequiredArgsConstructor;
 public enum TossPaymentStatus {
     READY(PaymentStatus.READY),
     IN_PROGRESS(PaymentStatus.PROCESSING),
-    WAITING_FOR_DEPOSIT(PaymentStatus.PROCESSING),
+    WAITING_FOR_DEPOSIT(PaymentStatus.WAITING_FOR_PAYMENT),
     DONE(PaymentStatus.SUCCESS),
     CANCELED(PaymentStatus.CANCELLED),
     PARTIAL_CANCELED(PaymentStatus.PARTIAL_CANCELLED),
