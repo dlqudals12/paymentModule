@@ -86,7 +86,7 @@ public class PaymentTransactionService {
                 .build());
 
         //결제 생성 이력 저장
-        saveHistory(payment, PaymentHistoryType.CREATED, null, null, null);
+        saveHistory(payment, payment.getPaymentStatus().getPaymentHistoryType(), null, null, null);
 
         return PaymentResponse.of(payment);
     }
@@ -111,6 +111,8 @@ public class PaymentTransactionService {
 
         //중복 승인 방지를 위해 처리 중 상태를 먼저 저장
         current.process(request.getPaymentKey());
+
+        //PROCESSING 진입은 PG 응답 대기와 달리 승인 요청을 시작한 이력으로 기록한다.
         saveHistory(current, PaymentHistoryType.PAYMENT_REQUESTED, PaymentStatus.READY, null, null);
 
         return current;
@@ -185,21 +187,19 @@ public class PaymentTransactionService {
             switch (result.getStatus()) {
                 case SUCCESS -> {
                     current.approve(result.getTransactionId(), result.getPaymentMethod(), result.getApprovedAt());
-                    saveHistory(current, PaymentHistoryType.PAYMENT_SUCCEEDED,
-                            previousStatus, result.getCode(), result.getMessage());
                 }
                 case PROCESSING, WAITING_FOR_PAYMENT -> {
                     current.pending(result.getStatus(), result.getTransactionId(), result.getPaymentMethod());
-                    saveHistory(current, PaymentHistoryType.PAYMENT_PENDING,
-                            previousStatus, result.getCode(), result.getMessage());
                 }
                 case FAILED, UNKNOWN, PARTIAL_CANCELLED, CANCELLED -> {
                     current.fail(result.getStatus(), limit(result.getCode(), 100), limit(result.getMessage(), 500));
-                    saveHistory(current, result.getStatus().getFailureHistoryType(),
-                            previousStatus, result.getCode(), result.getMessage());
                 }
                 default -> throw new ResponseStatusException(HttpStatus.CONFLICT, "저장할 수 없는 결제 상태입니다.");
             }
+
+            //PG 결과에 따른 상태 변경 이력은 enum에 정의된 유형으로 동일하게 저장한다.
+            saveHistory(current, result.getStatus().getPaymentHistoryType(),
+                    previousStatus, result.getCode(), result.getMessage());
         }
 
         //조회 결과가 불확실한 경우에도 실제 PG 통신 기록은 남긴다.

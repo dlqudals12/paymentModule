@@ -231,4 +231,14 @@ src/main/java/com/paymentModule/
 
 **당시 대화:** [enum 값의 공통 매핑](docs/conversations/enum-common-mapping.txt)
 
+### 2026-11-17 · 결제 상태별 이력 유형
+
+1. **문제 사항:** `PaymentStatus`의 `failureHistoryType`에는 실패 계열만 매핑되고, 성공·대기 이력 유형은 결과 저장 코드에 직접 적혀 있었습니다.
+2. **원인:** PG 결과의 상태별 이력 유형을 enum과 서비스가 나누어 관리했습니다.
+3. **생각과 해결 방향:** 상태에 대응하는 이력 유형은 `PaymentStatus`에서 꺼내 쓰되, 같은 `PROCESSING` 상태에서도 승인 요청 시작과 PG 응답 대기는 다른 이력이므로 요청 시작은 별도로 기록하기로 했습니다.
+4. **해결안:** `READY`·`PROCESSING`·`WAITING_FOR_PAYMENT`·`SUCCESS`와 실패 계열에 `paymentHistoryType`을 정의하고, 결제 생성과 PG 결과 저장에서 사용합니다. 승인 시작의 `PAYMENT_REQUESTED`는 명시적으로 유지합니다.
+5. **결과:** 상태별 기본 이력 유형을 enum에서 확인할 수 있고, PG 결과 저장의 세 분기는 같은 이력 저장 경로를 사용합니다.
+
+**당시 대화:** [결제 상태별 이력 유형](docs/conversations/payment-status-history-mapping.txt)
+
 결제 상태 복구와 완료 이벤트 재전달은 `PaymentScheduler`와 `schedule.payments` 설정 아래에 모았습니다. 처리량에 따른 배치 크기나 실행 분산은 실제 호출량을 본 뒤 결정하기로 했습니다.

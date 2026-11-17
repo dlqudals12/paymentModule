@@ -1,0 +1,27 @@
+결제 상태별 이력 유형
+
+이 수정 범위에 관한 사용자·AI 대화 발췌입니다. 도구 실행 내역은 제외했습니다.
+
+===== 2026-11-17 (Asia/Seoul) =====
+
+사용자:
+PaymentStatus에 failureHistoryType 있잖아 이거 그냥 paymentHistoryType으로 하면 안됨?
+
+AI:
+현재 `PaymentStatus`의 매핑과 사용처를 확인한 뒤, `paymentHistoryType`이라는 이름이 실제 의미와 맞는지 볼게.
+
+사용자:
+이름만 바꾸는게 아니지
+
+AI:
+맞아. 내가 이름 변경으로만 이해했어. 의도는 `PaymentStatus`의 각 상태에 맞는 `PaymentHistoryType`을 넣고, 서비스가 상태에서 그 값을 꺼내 이력을 기록하도록 하는 거지. 현재 이력 저장 경로를 더 확인할게.
+
+AI:
+맞아. 네 말은 이름만 바꾸는 게 아니라, **`PaymentStatus`마다 대응하는 `PaymentHistoryType`을 넣고 결과 저장 시 그 값을 꺼내 쓰자**는 뜻이었어. 내가 잘못 이해했어.
+
+현재 코드에서는 `SUCCESS`·`PROCESSING`·`WAITING_FOR_PAYMENT`의 이력 유형을 서비스에서 직접 지정하고, 실패 계열만 `failureHistoryType`에서 가져와. 이를 `paymentHistoryType`으로 통일할 수 있어. 다만 `PROCESSING` 진입 시의 `PAYMENT_REQUESTED`와 PG 응답 후의 `PAYMENT_PENDING`은 **같은 상태에서 발생하는 서로 다른 이력**이라, 진입 이력은 명시적으로 남겨야 해. `CREATED`도 상태 변경이 아닌 생성 이력이야.
+
+이 방향으로 수정하면 돼. 프로젝트 `AGENTS.md`에 코드 수정 전 확인 규칙이 있어서, **이 매핑과 사용처를 변경해도 될까?**
+
+사용자:
+수정하고 배포해
