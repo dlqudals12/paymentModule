@@ -124,9 +124,7 @@ public class PaymentTransactionService {
         CustomUserDetail user = AuthUtil.authentication();
         Payment current = verifiedPayment(request, user.getId());
 
-        boolean unresolved = current.getPaymentStatus() == PaymentStatus.PROCESSING
-                || current.getPaymentStatus() == PaymentStatus.UNKNOWN
-                || current.getPaymentStatus() == PaymentStatus.WAITING_FOR_PAYMENT;
+        boolean unresolved = current.getPaymentStatus().isRecoveryTarget();
 
         //미확정 시도는 최초 승인에 사용한 결제 키로만 복구할 수 있다.
         if (unresolved
@@ -179,9 +177,7 @@ public class PaymentTransactionService {
 
         if (updateStatus) {
             PaymentStatus previousStatus = current.getPaymentStatus();
-            if (previousStatus != PaymentStatus.PROCESSING
-                    && previousStatus != PaymentStatus.UNKNOWN
-                    && previousStatus != PaymentStatus.WAITING_FOR_PAYMENT) {
+            if (!previousStatus.isRecoveryTarget()) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "결제 상태가 변경되었습니다.");
             }
 

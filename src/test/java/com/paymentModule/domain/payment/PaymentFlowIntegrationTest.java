@@ -38,7 +38,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -404,8 +403,7 @@ class PaymentFlowIntegrationTest {
         ReflectionTestUtils.setField(processing, "paymentStatusChangedAt", LocalDateTime.now().minusMinutes(11));
         paymentRepository.saveAndFlush(processing);
         assertEquals(1, paymentRepository.findProcessingRecoveryCandidates(
-                List.of(PaymentStatus.PROCESSING, PaymentStatus.UNKNOWN,
-                        PaymentStatus.WAITING_FOR_PAYMENT),
+                PaymentStatus.recoveryTargets(),
                 LocalDateTime.now().minusMinutes(10)).size());
 
         when(tossPaymentApi.paymentByKey(paymentKey)).thenReturn(TossApiResult.success(200,

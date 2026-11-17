@@ -63,8 +63,7 @@ public class PaymentScheduler {
                 Duration.ofMillis(scheduleProperties.getProcessing().retryMinAgeMs()));
 
         List<Payment> payments = paymentRepository.findProcessingRecoveryCandidates(
-                List.of(PaymentStatus.PROCESSING, PaymentStatus.UNKNOWN,
-                        PaymentStatus.WAITING_FOR_PAYMENT), cutoff);
+                PaymentStatus.recoveryTargets(), cutoff);
 
         for (Payment payment : payments) {
             try {

@@ -67,8 +67,7 @@ class PaymentSchedulerTest {
         Payment unknown = Payment.builder().id(2L).paymentStatus(PaymentStatus.UNKNOWN).build();
         Payment waiting = Payment.builder().id(3L).paymentStatus(PaymentStatus.WAITING_FOR_PAYMENT).build();
         when(paymentRepository.findProcessingRecoveryCandidates(
-                eq(List.of(PaymentStatus.PROCESSING, PaymentStatus.UNKNOWN,
-                        PaymentStatus.WAITING_FOR_PAYMENT)), any(LocalDateTime.class)))
+                eq(PaymentStatus.recoveryTargets()), any(LocalDateTime.class)))
                 .thenReturn(List.of(processing, unknown, waiting));
 
         new PaymentScheduler(paymentRepository, paymentService, eventPublisher, properties).recoverProcessing();

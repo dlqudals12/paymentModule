@@ -234,12 +234,7 @@ public class TossPaymentProcessor implements PaymentProcessor {
             return null;
         }
 
-        return switch (method) {
-            case CARD -> PaymentMethod.CARD;
-            case TRANSFER -> PaymentMethod.TRANSFER;
-            case VIRTUAL_ACCOUNT -> PaymentMethod.VIRTUAL_ACCOUNT;
-            default -> null;
-        };
+        return method.getPaymentMethod();
     }
 
     /**
