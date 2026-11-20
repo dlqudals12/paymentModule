@@ -1,0 +1,36 @@
+.app-shell { width: min(900px, calc(100% - 32px)); margin: 0 auto; }
+.app-header { display: flex; justify-content: space-between; align-items: end; gap: 24px; padding: 44px 0 30px; }
+.app-header h1 { margin: 4px 0 0; font-size: 1.7rem; }
+.app-header nav { display: flex; gap: 18px; }
+.app-header nav a { text-decoration: none; color: #657187; }
+.app-header nav a.active { color: #2463d8; font-weight: 700; }
+.eyebrow { margin: 0; color: #2463d8; font-size: .82rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.card { max-width: 620px; background: white; border: 1px solid #e1e7ef; border-radius: 16px; padding: 30px; box-shadow: 0 12px 32px #192b4d0d; }
+.wide-card { max-width: none; }
+.card h2 { margin: 8px 0 6px; font-size: 1.45rem; }
+.muted { color: #657187; font-size: .9rem; line-height: 1.5; }
+.form, .ready-box { display: grid; gap: 16px; margin-top: 24px; }
+label { display: grid; gap: 7px; font-weight: 600; font-size: .92rem; }
+input { width: 100%; border: 1px solid #cbd5e2; border-radius: 9px; padding: 11px 12px; background: white; color: inherit; }
+input:focus { outline: 2px solid #8eb3fa; border-color: #2463d8; }
+button, .button-link { border: 0; border-radius: 9px; padding: 11px 16px; color: white; background: #2463d8; font-weight: 700; text-decoration: none; text-align: center; }
+button:disabled { opacity: .6; cursor: wait; }
+.text-button { padding: 0; margin-top: 18px; background: none; color: #2463d8; }
+.ready-box { border-top: 1px solid #e1e7ef; padding-top: 20px; }
+.ready-box p { margin: 0; }
+.ready-box strong { margin-left: 8px; }
+.notice { margin: 20px 0 0; padding: 12px 14px; border-radius: 9px; background: #eef4ff; color: #21457d; line-height: 1.5; }
+.button-link { display: inline-block; margin-top: 20px; }
+.secondary-link { margin-right: 10px; background: #50627f; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f7fb; border-radius: 9px; padding: 16px; }
+.table-scroll { overflow-x: auto; margin-top: 22px; }
+table { width: 100%; border-collapse: collapse; text-align: left; }
+th, td { padding: 12px 10px; border-bottom: 1px solid #e1e7ef; white-space: nowrap; }
+th { color: #657187; font-size: .84rem; }
+td a { color: #2463d8; }
+.pagination { display: flex; align-items: center; gap: 12px; margin-top: 20px; }
+
+@media (max-width: 640px) {
+  .app-header { align-items: start; flex-direction: column; padding-top: 28px; }
+  .card { padding: 22px; }
+}

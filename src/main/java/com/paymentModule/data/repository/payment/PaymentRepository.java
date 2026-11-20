@@ -5,6 +5,8 @@ import com.paymentModule.data.enums.PaymentProvider;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.data.enums.OrderStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -15,6 +17,16 @@ import java.util.List;
 import java.time.LocalDateTime;
 
 public interface PaymentRepository extends JpaRepository<Payment, Long> {
+    /**
+     * 로그인한 사용자의 결제만 최신순으로 조회한다.
+     */
+    Page<Payment> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
+
+    /**
+     * 다른 사용자의 결제는 조회 결과에서 제외한다.
+     */
+    Optional<Payment> findByIdAndUserId(Long id, Long userId);
+
     /**
      * 동일 주문의 중복 승인 요청을 막기 위해 결제 행을 잠그고 조회한다.
      */

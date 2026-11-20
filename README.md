@@ -15,6 +15,7 @@
 | 데이터 저장소 | MySQL 8.4, Redis 7.4 |
 | PG 통신 | Spring `RestClient` |
 | API 문서 | springdoc OpenAPI |
+| API 테스트 화면 | React 19, Vite 8, React Router 8, Axios, TossPayments SDK 2 |
 | 테스트 | JUnit 5, Spring Boot Test, H2, Mockito |
 
 Redis 의존성과 컨테이너 설정은 포함되어 있지만, 현재 결제 승인 흐름의 상태·이력·API 로그는 MySQL에 저장합니다.
@@ -98,6 +99,9 @@ PG API 오류는 `BusinessException`을 상속한 `PaymentException`으로 전�
 | POST | `/apis/v3/auth/logout` | JWT 쿠키 삭제 |
 | POST | `/apis/v3/payments/ready` | 결제 준비 및 기존 `READY` 시도 재사용 |
 | POST | `/apis/v3/payments` | SDK 인증 결과 검증 및 PG 승인 |
+| GET | `/apis/v3/payments/toss/client-key` | 로그인한 브라우저에 공개용 토스 클라이언트 키 전달 |
+| GET | `/apis/v3/payments?page=0` | 로그인한 사용자의 결제 목록, 20건씩 최신순 조회 |
+| GET | `/apis/v3/payments/{paymentId}` | 로그인한 사용자의 결제 한 건 조회 |
 
 `ready` 요청은 `provider`, `orderId`를 사용합니다. 승인 요청은 `provider`, `orderId`, `paymentKey`, `amount`를 사용합니다. 결제 응답은 `paymentId`, `provider`, `orderId`, `amount`, `paymentStatus`, `orderStatus`를 포함하며 공통 성공 응답으로 감쌉니다.
 
@@ -124,7 +128,9 @@ src/main/java/com/paymentModule/
 2. 토스 API를 실제 호출할 경우 `TOSS_CLIENT_KEY`, `TOSS_SECRET_KEY`, `TOSS_SECURITY_KEY` 환경 변수를 설정합니다. 설정 위치는 `src/main/resources/application.yaml`입니다.
 3. 프로젝트 루트에서 `./gradlew bootRun`을 실행합니다. Windows PowerShell에서는 `.\gradlew.bat bootRun`을 사용합니다.
 
-애플리케이션 포트는 `8080`입니다. `compose.yml`에 MySQL과 Redis가 정의되어 있고 Spring Boot Docker Compose 연동이 활성화되어 있습니다. MySQL은 로컬 `3306` 포트를 사용합니다. 최초 테이블 생성 SQL은 `src/main/resources/sql/schema.sql`에 있습니다.
+애플리케이션 포트는 `8080`입니다. `compose.yml`에 MySQL과 Redis가 정의되어 있고 Spring Boot Docker Compose 연동이 활성화되어 있습니다. MySQL은 로컬 `3306` 포트를 사용합니다. 최초 테이블 생성 SQL은 `src/main/resources/sql/schema.sql`에 있습니다. Hibernate 물리적 명명 전략은 스키마의 camelCase 컬럼명을 그대로 사용하도록 설정합니다. 기존 테이블에는 `CREATE TABLE IF NOT EXISTS`가 새 컬럼을 추가하지 않으므로 스키마 변경 시 별도 반영이 필요합니다.
+
+React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci`, `npm run dev`로 시작합니다. 화면은 Vite 개발 서버의 `/apis` 프록시를 통해 백엔드에 요청하므로 로그인 JWT 쿠키를 같은 출처로 전달합니다. 로그인·회원가입, `ready`, 토스 SDK 결제창, 성공 URL의 승인 요청, 실패 화면, 본인 결제 목록·단건 조회를 제공합니다. 토스 클라이언트 키는 백엔드의 `TOSS_CLIENT_KEY` 설정에서 공개용 키만 조회하며 시크릿 키는 브라우저에 전달하지 않습니다. 이 화면은 SDK의 `payment()`를 사용하므로 실제 PG 테스트에는 API 개별 연동 테스트 클라이언트 키(`test_ck`)와 짝이 맞는 시크릿 키(`test_sk`)가 필요합니다.
 
 현재는 DB를 새로 생성하는 단계이므로 결제 테이블 구조는 `src/main/resources/sql/schema.sql`을 기준으로 관리합니다.
 
@@ -139,6 +145,7 @@ src/main/java/com/paymentModule/
 - `PaymentCompletedEventListenerTest`: 완료 이벤트를 받으면 `PENDING`까지만 기록하는지 확인합니다.
 - `TossPaymentProcessorTest`: 토스 응답의 결제 상태·금액·식별자 변환을 검증합니다.
 - `TossPaymentApiTest`: 토스 API 클라이언트 호출을 다룹니다. 실제 API를 호출하는 테스트는 입력값과 키 설정을 먼저 확인해야 합니다.
+- `frontend`: `npm run build`, `npm run lint`로 React 테스트 화면의 빌드·정적 검사를 확인합니다.
 
 ## 사용처 연결과 현재 구현 범위
 
@@ -149,7 +156,7 @@ src/main/java/com/paymentModule/
 
 ## 날짜별 문제와 해결 기록
 
-날짜는 해당 구현의 Git 커밋 날짜를 기준으로 했습니다. `결과`는 구현된 코드의 동작을 뜻하며 테스트 통과를 의미하지 않습니다. 각 항목의 `당시 대화`는 해당 수정 범위의 사용자·AI 메시지만 발췌한 텍스트이며, 비속어는 표시 없이 삭제했습니다.
+날짜는 해당 구현의 Git 커밋 날짜를 기준으로 했으며, 미커밋 작업은 작업 날짜를 표시합니다. `결과`는 구현된 코드의 동작을 뜻하며 테스트 통과를 의미하지 않습니다. 각 항목의 `당시 대화`는 해당 수정 범위의 사용자·AI 메시지만 발췌한 텍스트이며, 비속어는 표시 없이 삭제했습니다.
 
 ### 2026-11-12 · 결제 준비와 중복 요청
 
@@ -240,5 +247,15 @@ src/main/java/com/paymentModule/
 5. **결과:** 상태별 기본 이력 유형을 enum에서 확인할 수 있고, PG 결과 저장의 세 분기는 같은 이력 저장 경로를 사용합니다.
 
 **당시 대화:** [결제 상태별 이력 유형](docs/conversations/payment-status-history-mapping.txt)
+
+### 2026-11-20 · React 결제 테스트 화면과 조회 API
+
+1. **문제 사항:** 브라우저에서 로그인부터 SDK 결제 요청·서버 승인·저장 결과 조회까지 한 흐름으로 시험할 화면과 결제 조회 API가 없었습니다.
+2. **원인:** 백엔드에는 `ready`와 승인 API만 있었고, 토스 클라이언트 키는 서버 설정에만 있었습니다.
+3. **생각과 해결 방향:** React JSX 화면을 경로별로 나누고 Axios와 Vite 프록시로 로그인 쿠키를 전달합니다. 브라우저에는 공개 클라이언트 키만 제공하고, 결제 조회는 현재 사용자로 제한합니다.
+4. **해결안:** `frontend`에 로그인·결제·성공·실패·목록·상세 화면을 추가했습니다. 백엔드에는 토스 클라이언트 키, 사용자별 결제 목록과 단건 조회 API를 연결했습니다.
+5. **결과:** 프런트 빌드와 린트, 백엔드 컴파일을 확인했습니다. 실제 PG 승인 흐름은 Docker·DB 및 토스 테스트 키를 갖춘 환경에서 확인해야 합니다.
+
+**당시 대화:** [React 결제 테스트 화면](docs/conversations/react-payment-test-frontend.txt)
 
 결제 상태 복구와 완료 이벤트 재전달은 `PaymentScheduler`와 `schedule.payments` 설정 아래에 모았습니다. 처리량에 따른 배치 크기나 실행 분산은 실제 호출량을 본 뒤 결정하기로 했습니다.

@@ -4,6 +4,7 @@ import com.paymentModule.data.enums.PaymentApiType;
 import com.paymentModule.data.enums.PaymentProvider;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.data.model.entity.payment.Payment;
+import com.paymentModule.data.repository.payment.PaymentRepository;
 import com.paymentModule.domain.payment.dto.request.PaymentReadyRequest;
 import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.domain.payment.dto.response.PaymentResponse;
@@ -12,12 +13,16 @@ import com.paymentModule.domain.payment.processor.PaymentProcessor;
 import com.paymentModule.event.payments.PaymentCompletedEvent;
 import com.paymentModule.global.exception.PaymentException;
 import com.paymentModule.global.properties.payments.PaymentRecoveryProperties;
+import com.paymentModule.global.util.AuthUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
@@ -34,6 +39,29 @@ public class PaymentService {
     private final Map<PaymentProvider, PaymentProcessor> paymentProcessors;
     private final ApplicationEventPublisher eventPublisher;
     private final PaymentRecoveryProperties recoveryProperties;
+    private final PaymentRepository paymentRepository;
+
+    /**
+     * 로그인한 사용자의 저장된 결제를 최신순으로 조회한다.
+     */
+    @Transactional(readOnly = true)
+    public Page<PaymentResponse> payments(int page) {
+        Long userId = AuthUtil.authentication().getId();
+        return paymentRepository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(page, 20))
+                .map(PaymentResponse::of);
+    }
+
+    /**
+     * 로그인한 사용자의 결제 한 건을 조회한다.
+     */
+    @Transactional(readOnly = true)
+    public PaymentResponse payment(Long paymentId) {
+        Long userId = AuthUtil.authentication().getId();
+        Payment payment = paymentRepository.findByIdAndUserId(paymentId, userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "결제를 찾을 수 없습니다."));
+
+        return PaymentResponse.of(payment);
+    }
 
     /**
      * 결제 준비

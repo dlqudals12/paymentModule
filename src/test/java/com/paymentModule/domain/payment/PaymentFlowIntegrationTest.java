@@ -121,6 +121,36 @@ class PaymentFlowIntegrationTest {
     }
 
     /**
+     * 결제 목록과 단건 조회는 로그인한 사용자의 결제만 반환한다.
+     */
+    @Test
+    void paymentQueriesAreRestrictedToOwner() {
+        PaymentResponse ready = paymentController.ready(readyRequest("order_query_001")).getData();
+
+        assertEquals(ready.getPaymentId(),
+                paymentController.payments(0).getData().getContent().getFirst().getPaymentId());
+        assertEquals(ready.getPaymentId(),
+                paymentController.payment(ready.getPaymentId()).getData().getPaymentId());
+
+        //같은 결제 ID를 알아도 다른 사용자는 목록과 단건 조회에서 볼 수 없다.
+        User other = User.builder()
+                .id(102L)
+                .userId("other-payment-tester")
+                .password("unused")
+                .email("other@example.com")
+                .userName("다른 사용자")
+                .role(UserRoleType.USER)
+                .build();
+        CustomUserDetail detail = new CustomUserDetail(other);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(detail, "", detail.getAuthorities()));
+
+        assertTrue(paymentController.payments(0).getData().isEmpty());
+        assertThrows(ResponseStatusException.class,
+                () -> paymentController.payment(ready.getPaymentId()));
+    }
+
+    /**
      * 준비, 승인, 이력, 통신 로그, 완료 이벤트가 한 흐름으로 이어지는지 확인한다.
      */
     @Test
