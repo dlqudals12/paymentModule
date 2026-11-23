@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { loadTossPayments } from '@tosspayments/tosspayments-sdk'
+import { useLocation } from 'react-router'
 import { apiError, loadClientKey, readyPayment } from '../api.js'
 
 function newOrderId() {
@@ -16,9 +17,10 @@ function customerKey() {
 }
 
 function CheckoutPage() {
-  const [orderId, setOrderId] = useState(newOrderId)
+  const location = useLocation()
+  const [orderId, setOrderId] = useState(() => location.state?.ready?.orderId ?? newOrderId())
   const [clientKey, setClientKey] = useState('')
-  const [ready, setReady] = useState(null)
+  const [ready, setReady] = useState(() => location.state?.ready ?? null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 

@@ -30,6 +30,11 @@ export async function readyPayment(orderId) {
   return response.data.data
 }
 
+export async function retryPayment(paymentId) {
+  const response = await api.post(`/payments/${paymentId}/retry`)
+  return response.data.data
+}
+
 export async function approvePayment({ paymentKey, orderId, amount }) {
   const response = await api.post('/payments', {
     provider: 'TOSS',

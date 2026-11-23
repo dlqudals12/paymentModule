@@ -51,6 +51,40 @@ public class PaymentTransactionService {
     }
 
     /**
+     * 실패가 확정된 결제 행을 잠그고 서버 금액으로 새 SDK 시도를 준비한다.
+     */
+    @Transactional
+    public PaymentResponse rePayment(Long paymentId) {
+        CustomUserDetail user = AuthUtil.authentication();
+        Payment current = paymentRepository.findLockedById(paymentId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "결제를 찾을 수 없습니다."));
+
+        //결제 ID를 알아도 타인의 결제를 재준비할 수 없도록 소유자를 다시 확인한다.
+        if (!current.getUserId().equals(user.getId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "결제를 찾을 수 없습니다.");
+        }
+
+        if (current.getPaymentStatus() == PaymentStatus.SUCCESS) {
+            //PG 조회와 재준비 사이에 다른 요청이 성공을 확정했으면 기존 결과를 반환한다.
+            return PaymentResponse.of(current);
+        }
+
+        if (current.getPaymentStatus() == PaymentStatus.READY) {
+            //중복 재시도 요청은 서버 금액만 다시 확인하고 멱등키는 유지한다.
+            current.updateReadyAmount(paymentAmountCalculator.calculate(current.getOrderId()));
+            return PaymentResponse.of(current);
+        }
+
+        if (current.getPaymentStatus() != PaymentStatus.FAILED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "재결제할 수 없는 결제 상태입니다.");
+        }
+
+        Long amount = paymentAmountCalculator.calculate(current.getOrderId());
+
+        return retryReady(current, user, amount, current.getProvider());
+    }
+
+    /**
      * 같은 주문의 준비 상태는 갱신하고 실패 상태는 같은 행에서 재준비한다.
      */
     private PaymentResponse updateReady(Payment current, PaymentReadyRequest request,
@@ -62,9 +96,7 @@ public class PaymentTransactionService {
 
         if (current.getPaymentStatus() == PaymentStatus.FAILED) {
             //기존 실패 결과는 이력·API 로그에 남기고 현재 행만 새 시도로 초기화한다.
-            current.retryReady(request.getProvider(), user.getUserId(), amount);
-            saveHistory(current, PaymentHistoryType.READY_RETRIED, PaymentStatus.FAILED, null, null, null);
-            return PaymentResponse.of(current);
+            return retryReady(current, user, amount, request.getProvider());
         }
 
         //이미 SDK를 시작한 시도는 덮어쓰지 않는다. READY의 PG사 변경도 새 시도로 간주한다.
@@ -75,6 +107,17 @@ public class PaymentTransactionService {
 
         //새로고침으로 다시 준비하면 같은 시도를 유지하고 서버 금액으로 갱신한다.
         current.updateReadyAmount(amount);
+
+        return PaymentResponse.of(current);
+    }
+
+    /**
+     * 기존 실패 시도를 보존할 이력을 남기고 현재 결제 행만 새 준비 상태로 바꾼다.
+     */
+    private PaymentResponse retryReady(Payment current, CustomUserDetail user, Long amount,
+                                       PaymentProvider provider) {
+        current.retryReady(provider, user.getUserId(), amount);
+        saveHistory(current, PaymentHistoryType.READY_RETRIED, PaymentStatus.FAILED, null, null, null);
 
         return PaymentResponse.of(current);
     }

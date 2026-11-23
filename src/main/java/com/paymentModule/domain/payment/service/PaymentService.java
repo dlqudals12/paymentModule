@@ -81,6 +81,44 @@ public class PaymentService {
     }
 
     /**
+     * 기존 결제 ID로 재시도를 시작한다. 결과 미확인 상태는 PG 조회로 먼저 확정한다.
+     */
+    public PaymentResponse rePayment(Long paymentId) {
+        Long userId = AuthUtil.authentication().getId();
+        Payment current = paymentRepository.findByIdAndUserId(paymentId, userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "결제를 찾을 수 없습니다."));
+
+        //이미 성공한 결제에는 새 PG 승인을 보내지 않는다.
+        if (current.getPaymentStatus() == PaymentStatus.SUCCESS) {
+            return PaymentResponse.of(current);
+        }
+
+        if (current.getPaymentStatus() == PaymentStatus.UNKNOWN) {
+            //결제 결과가 불확실할 때 새 SDK 시도를 열기 전에 저장된 PG 키로 즉시 조회한다.
+            if (current.getExternalPaymentId() == null || current.getExternalPaymentId().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "조회할 PG 결제 키가 없습니다.");
+            }
+
+            try {
+                PaymentResponse resolved = recover(current, processor(current.getProvider()),
+                        current.getExternalPaymentId());
+
+                if (resolved.getPaymentStatus() == PaymentStatus.SUCCESS) {
+                    return resolved;
+                }
+
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "기존 결제 결과를 아직 확인할 수 없습니다.");
+            } catch (PaymentException | ResponseStatusException exception) {
+                //별도 조회 없이 잠금 트랜잭션에서 확정된 최신 상태를 확인한다.
+                return paymentTransactionService.rePayment(paymentId);
+            }
+        }
+
+        //SDK 인증은 이 응답 이후 브라우저에서 수행하고, 새 키의 승인은 기존 payment API로 처리한다.
+        return paymentTransactionService.rePayment(paymentId);
+    }
+
+    /**
      * 결제 승인
      */
     public PaymentResponse payment(PaymentRequest request) {

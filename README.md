@@ -37,6 +37,8 @@ Redis 의존성과 컨테이너 설정은 포함되어 있지만, 현재 결제 
 6. 같은 결제 키로 `PROCESSING`, `UNKNOWN` 또는 `WAITING_FOR_PAYMENT` 요청이 다시 들어오면 PG 결제를 조회합니다. 조회 성공은 주문번호·금액·결제 키를 대조해 확정합니다. 토스가 결제 정보 부재를 명시한 404는 5초 간격으로 두 번 더 조회하고, 세 번 모두 결제 부재일 때 `FAILED`로 확정해 새 `ready` 시도를 허용합니다. 통신 오류 등 불확실한 조회 결과는 기존 상태를 유지합니다.
 7. 성공 결과가 커밋되면 `PaymentCompletedEvent`를 발행합니다. 비동기 수신부는 `orderStatus`를 `BEFORE → PENDING`으로 변경합니다. 실제 주문 반영이 성공한 뒤 `COMPLETE`로 변경하는 연결은 TODO로 남아 있습니다.
 
+실패한 결제를 다시 시도할 때는 `POST /apis/v3/payments/{paymentId}/retry`로 내부 결제 ID를 전달합니다. `FAILED`는 같은 행에서 새 `READY` 시도로 준비하고, `UNKNOWN`은 저장된 PG 결제 키로 즉시 조회한 뒤 성공이면 기존 결과를 반환합니다. PG가 실패 또는 결제 부재를 확정한 경우에만 재준비하며, 결과가 여전히 불확실하면 새 시도를 막습니다. 재준비 응답을 받은 브라우저는 SDK를 다시 실행하고 새 결제 키로 기존 승인 API를 호출합니다. 같은 재결제 준비 요청이 `READY` 상태에 다시 들어오면 새 멱등키를 만들지 않고 준비 결과를 반환합니다.
+
 결제 상태는 `paymentStatus`, 주문 반영 상태는 `orderStatus`로 따로 저장하고 각각의 마지막 변경 시각을 `paymentStatusChangedAt`, `orderStatusChangedAt`에 기록합니다. 스케줄러는 `BEFORE` 건에는 결제 완료 시각인 `approvedAt`을, `PENDING` 건에는 주문 반영 상태 변경 시각을 사용해 유예 시간이 지난 모든 완료 이벤트를 다시 전달합니다. 실제 상품·주문 반영 코드는 아직 연결되지 않았으므로 이벤트 수신 후에도 `orderStatus`는 `PENDING`에 남습니다.
 
 `PaymentScheduler`는 상태 변경 후 설정된 유예 시간이 지난 `PROCESSING`·`UNKNOWN`·`WAITING_FOR_PAYMENT` 결제를 저장된 결제 키로 PG에 조회합니다. 조회 결과가 입금 대기이면 `WAITING_FOR_PAYMENT`로 확정하고 다음 실행에서 다시 확인합니다. 주문 이벤트 재전달과 결제 상태 복구는 `schedule.payments` 아래 `order`, `processing` 설정으로 각각 조정합니다. 현재 두 작업은 시작 1분 후 첫 실행을 시작하고 각 실행이 끝난 5분 뒤 다시 실행합니다. 대상의 기준 시각에서 10분이 지난 건을 조회합니다.
@@ -98,6 +100,7 @@ PG API 오류는 `BusinessException`을 상속한 `PaymentException`으로 전�
 | POST | `/apis/v3/auth/refresh` | JWT 쿠키 갱신 |
 | POST | `/apis/v3/auth/logout` | JWT 쿠키 삭제 |
 | POST | `/apis/v3/payments/ready` | 결제 준비, 기존 `READY` 금액 갱신 및 `FAILED` 행 재준비 |
+| POST | `/apis/v3/payments/{paymentId}/retry` | 실패 결제 재준비. `UNKNOWN`이면 PG 결과 조회 후 판단 |
 | POST | `/apis/v3/payments` | SDK 인증 결과 검증 및 PG 승인 |
 | GET | `/apis/v3/payments/toss/client-key` | 로그인한 브라우저에 공개용 토스 클라이언트 키 전달 |
 | GET | `/apis/v3/payments?page=0` | 로그인한 사용자의 결제 목록, 20건씩 최신순 조회 |
@@ -132,7 +135,7 @@ src/main/java/com/paymentModule/
 
 애플리케이션 포트는 `8080`입니다. `compose.yml`에 MySQL과 Redis가 정의되어 있고 Spring Boot Docker Compose 연동이 활성화되어 있습니다. MySQL은 로컬 `3306` 포트를 사용합니다. 최초 테이블 생성 SQL은 `src/main/resources/sql/schema.sql`에 있습니다. Hibernate 물리적 명명 전략은 스키마의 camelCase 컬럼명을 그대로 사용하도록 설정합니다. 기존 테이블에는 `CREATE TABLE IF NOT EXISTS`가 새 컬럼을 추가하지 않으므로 스키마 변경 시 별도 반영이 필요합니다.
 
-React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci`, `npm run dev`로 시작합니다. 화면은 Vite 개발 서버의 `/apis` 프록시를 통해 백엔드에 요청하므로 로그인 JWT 쿠키를 같은 출처로 전달합니다. 로그인·회원가입, `ready`, 토스 SDK 결제창, 성공 URL의 승인 요청, 실패 화면, 본인 결제 목록·단건 조회를 제공합니다. 토스 클라이언트 키는 백엔드의 `TOSS_CLIENT_KEY` 설정에서 공개용 키만 조회하며 시크릿 키는 브라우저에 전달하지 않습니다. 이 화면은 SDK의 `payment()`를 사용하므로 실제 PG 테스트에는 API 개별 연동 테스트 클라이언트 키(`test_ck`)와 짝이 맞는 시크릿 키(`test_sk`)가 필요합니다.
+React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci`, `npm run dev`로 시작합니다. 화면은 Vite 개발 서버의 `/apis` 프록시를 통해 백엔드에 요청하므로 로그인 JWT 쿠키를 같은 출처로 전달합니다. 로그인·회원가입, `ready`, 토스 SDK 결제창, 성공 URL의 승인 요청, 실패 화면, 본인 결제 목록·단건 조회와 실패·결과 미확인 결제의 재시도 버튼을 제공합니다. 토스 클라이언트 키는 백엔드의 `TOSS_CLIENT_KEY` 설정에서 공개용 키만 조회하며 시크릿 키는 브라우저에 전달하지 않습니다. 이 화면은 SDK의 `payment()`를 사용하므로 실제 PG 테스트에는 API 개별 연동 테스트 클라이언트 키(`test_ck`)와 짝이 맞는 시크릿 키(`test_sk`)가 필요합니다.
 
 현재는 DB를 새로 생성하는 단계이므로 결제 테이블 구조는 `src/main/resources/sql/schema.sql`을 기준으로 관리합니다.
 
@@ -142,7 +145,7 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 .\gradlew.bat test
 ```
 
-- `PaymentFlowIntegrationTest`: H2와 Spring Boot 컨텍스트로 준비·승인·실패·대기·재시도 흐름을 검증하고 토스 외부 호출만 모킹합니다.
+- `PaymentFlowIntegrationTest`: H2와 Spring Boot 컨텍스트로 준비·승인·실패·대기·재결제·재시도 흐름을 검증하고 토스 외부 호출만 모킹합니다.
 - `PaymentSchedulerTest`: 재조회 대상과 100건이 넘는 완료 이벤트 재전달을 검증합니다.
 - `PaymentCompletedEventListenerTest`: 완료 이벤트를 받으면 `PENDING`까지만 기록하는지 확인합니다.
 - `TossPaymentProcessorTest`: 토스 응답의 결제 상태·금액·식별자 변환을 검증합니다.
@@ -289,5 +292,15 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 5. **결과:** 내부 참조와 PG 결제 키가 구분됩니다. 기존 DB에서는 `CREATE TABLE IF NOT EXISTS`가 컬럼을 변경하지 않으므로 별도 스키마 반영이 필요합니다.
 
 **당시 대화:** [외부 결제 식별자 명칭](docs/conversations/external-payment-id.txt)
+
+### 2026-11-23 · 결제 ID 기반 재결제 준비
+
+1. **문제 사항:** 실패한 결제는 주문 ID로 `ready`를 다시 호출할 수 있었지만, 저장된 결제 ID에서 재결제를 시작할 API가 없었습니다. `UNKNOWN`을 바로 재시도하면 실제 승인 결과와 겹칠 수 있었습니다.
+2. **원인:** 결과 복구는 스케줄러와 동일 결제 키의 재진입에 연결돼 있었고, 사용자가 결제 ID로 즉시 결과를 확인하고 새 시도를 여는 흐름은 분리돼 있지 않았습니다.
+3. **생각과 해결 방향:** 재결제 요청 시 본인 결제의 상태를 확인합니다. `UNKNOWN`은 기존 키로 PG를 먼저 조회해 성공을 반환하거나 실패를 확정하고, 불확실한 경우에는 새 시도를 막습니다. 새 SDK 인증은 준비 이후 브라우저에서 진행합니다.
+4. **해결안:** 결제 ID 기반 재결제 준비 API와 상태 확인 로직을 추가했습니다. 실패가 확정되면 같은 행을 잠가 금액·멱등키를 새로 준비하고 이력을 저장합니다. PG 조회 뒤에는 별도 조회 없이 재준비 트랜잭션의 행 잠금 안에서 최신 상태를 확인합니다. 테스트 화면에서는 결제 상세의 재시도 버튼으로 이 흐름을 시작합니다.
+5. **결과:** 확정 실패는 새 `READY`로, 기존 성공은 기존 성공 결과로 처리합니다. 불확실한 결제는 `UNKNOWN`을 유지합니다. 실제 PG 연동 검증은 실행 환경에서 확인해야 합니다.
+
+**당시 대화:** [결제 ID 기반 재결제 논의](docs/conversations/payment-retry-by-id.txt)
 
 결제 상태 복구와 완료 이벤트 재전달은 `PaymentScheduler`와 `schedule.payments` 설정 아래에 모았습니다. 처리량에 따른 배치 크기나 실행 분산은 실제 호출량을 본 뒤 결정하기로 했습니다.

@@ -148,6 +148,8 @@ class PaymentFlowIntegrationTest {
         assertTrue(paymentController.payments(0).getData().isEmpty());
         assertThrows(ResponseStatusException.class,
                 () -> paymentController.payment(ready.getId()));
+        assertThrows(ResponseStatusException.class,
+                () -> paymentController.rePayment(ready.getId()));
     }
 
     /**
@@ -299,6 +301,120 @@ class PaymentFlowIntegrationTest {
         assertEquals(first.getId(), completed.getId());
         assertEquals(PaymentStatus.SUCCESS, completed.getPaymentStatus());
         assertEquals(2, paymentApiLogRepository.count());
+    }
+
+    /**
+     * 결제 ID로 실패 시도를 재준비하고 새 SDK 키로 승인한다.
+     */
+    @Test
+    void rePaymentPreparesFailedPaymentById() {
+        String orderId = "order_repayment_001";
+        PaymentResponse first = paymentController.ready(readyRequest(orderId)).getData();
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.failure(400, "INVALID_REQUEST", "승인 거절"),
+                        TossApiResult.success(200,
+                                tossResponse(orderId, "payment_repayment_002", READY_AMOUNT,
+                                        TossPaymentStatus.DONE)));
+
+        assertThrows(PaymentException.class,
+                () -> paymentController.payment(paymentRequest(orderId, "payment_repayment_001", READY_AMOUNT)));
+
+        PaymentResponse prepared = paymentController.rePayment(first.getId()).getData();
+        assertEquals(first.getId(), prepared.getId());
+        assertEquals(PaymentStatus.READY, prepared.getPaymentStatus());
+        assertNull(prepared.getExternalPaymentId());
+
+        //같은 재시도 요청은 준비 상태를 유지하고 새로운 시도를 중복 생성하지 않는다.
+        String retryIdempotencyKey = paymentRepository.findById(first.getId())
+                .orElseThrow().getIdempotencyKey();
+        assertEquals(prepared.getId(), paymentController.rePayment(first.getId()).getData().getId());
+        assertEquals(retryIdempotencyKey, paymentRepository.findById(first.getId())
+                .orElseThrow().getIdempotencyKey());
+        assertEquals(1, paymentHistoryRepository.findAll().stream()
+                .filter(history -> history.getHistoryType() == PaymentHistoryType.READY_RETRIED).count());
+
+        PaymentResponse completed = paymentController.payment(
+                paymentRequest(orderId, "payment_repayment_002", READY_AMOUNT)).getData();
+        assertEquals(first.getId(), completed.getId());
+        assertEquals(PaymentStatus.SUCCESS, completed.getPaymentStatus());
+        assertEquals(2, paymentApiLogRepository.count());
+    }
+
+    /**
+     * UNKNOWN 재결제 요청은 먼저 PG를 조회하고 기존 성공 결과를 반환한다.
+     */
+    @Test
+    void rePaymentReturnsRecoveredSuccess() {
+        String orderId = "order_repayment_success_001";
+        String paymentKey = "payment_repayment_success_001";
+        PaymentResponse first = paymentController.ready(readyRequest(orderId)).getData();
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
+
+        assertThrows(PaymentException.class,
+                () -> paymentController.payment(paymentRequest(orderId, paymentKey, READY_AMOUNT)));
+
+        when(tossPaymentApi.paymentByKey(paymentKey)).thenReturn(TossApiResult.success(200,
+                tossResponse(orderId, paymentKey, READY_AMOUNT, TossPaymentStatus.DONE)));
+
+        PaymentResponse recovered = paymentController.rePayment(first.getId()).getData();
+        assertEquals(PaymentStatus.SUCCESS, recovered.getPaymentStatus());
+        assertEquals(first.getId(), recovered.getId());
+        assertEquals(paymentKey, recovered.getExternalPaymentId());
+        assertEquals(0, paymentHistoryRepository.findAll().stream()
+                .filter(history -> history.getHistoryType() == PaymentHistoryType.READY_RETRIED).count());
+        verify(tossPaymentApi, times(1)).paymentByKey(paymentKey);
+        verify(tossPaymentApi, times(1)).confirm(any(TossConfirmRequest.class), anyString());
+    }
+
+    /**
+     * PG가 세 번 연속 결제 부재를 확인한 경우에만 UNKNOWN을 실패로 확정해 재준비한다.
+     */
+    @Test
+    void rePaymentPreparesAfterConfirmedNotFound() {
+        String orderId = "order_repayment_missing_001";
+        String paymentKey = "payment_repayment_missing_001";
+        PaymentResponse first = paymentController.ready(readyRequest(orderId)).getData();
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
+
+        assertThrows(PaymentException.class,
+                () -> paymentController.payment(paymentRequest(orderId, paymentKey, READY_AMOUNT)));
+
+        when(tossPaymentApi.paymentByKey(paymentKey))
+                .thenReturn(TossApiResult.failure(404, "NOT_FOUND_PAYMENT", "결제 정보 없음"));
+
+        PaymentResponse prepared = paymentController.rePayment(first.getId()).getData();
+        assertEquals(PaymentStatus.READY, prepared.getPaymentStatus());
+        assertEquals(first.getId(), prepared.getId());
+        assertNull(prepared.getExternalPaymentId());
+        verify(tossPaymentApi, times(3)).paymentByKey(paymentKey);
+        assertEquals(1, paymentHistoryRepository.findAll().stream()
+                .filter(history -> history.getHistoryType() == PaymentHistoryType.READY_RETRIED).count());
+    }
+
+    /**
+     * 재조회 통신 오류만으로 UNKNOWN을 실패로 바꾸거나 새 SDK 시도를 열지 않는다.
+     */
+    @Test
+    void rePaymentKeepsUnknownWhenLookupIsUncertain() {
+        String orderId = "order_repayment_unknown_001";
+        String paymentKey = "payment_repayment_unknown_001";
+        PaymentResponse first = paymentController.ready(readyRequest(orderId)).getData();
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
+
+        assertThrows(PaymentException.class,
+                () -> paymentController.payment(paymentRequest(orderId, paymentKey, READY_AMOUNT)));
+
+        when(tossPaymentApi.paymentByKey(paymentKey))
+                .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
+
+        assertThrows(ResponseStatusException.class, () -> paymentController.rePayment(first.getId()));
+        assertEquals(PaymentStatus.UNKNOWN,
+                paymentRepository.findById(first.getId()).orElseThrow().getPaymentStatus());
+        assertEquals(0, paymentHistoryRepository.findAll().stream()
+                .filter(history -> history.getHistoryType() == PaymentHistoryType.READY_RETRIED).count());
     }
 
     /**

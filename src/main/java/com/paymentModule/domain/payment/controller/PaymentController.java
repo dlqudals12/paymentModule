@@ -76,6 +76,17 @@ public class PaymentController {
     }
 
     /**
+     * 실패한 결제를 같은 행에서 다시 준비하고, 결과 미확인 시에는 PG 조회를 먼저 수행한다.
+     */
+    @Operation(summary = "재결제 준비", description = "결제 ID로 실패 상태를 확인하고 새 SDK 시도를 준비합니다.")
+    @ApiResponse(responseCode = "200", description = "재결제 준비 또는 기존 성공 결과 조회 성공")
+    @Secured("ROLE_USER")
+    @PostMapping("/{paymentId}/retry")
+    public SuccessResponse<PaymentResponse> rePayment(@PathVariable Long paymentId) {
+        return SuccessResponse.of(paymentService.rePayment(paymentId));
+    }
+
+    /**
      * SDK 인증 결과를 저장된 준비 정보와 대조하고 해당 PG 결제를 승인한다.
      */
     @Operation(summary = "결제 승인", description = "SDK 인증 결과를 검증한 뒤 해당 PG에 승인을 요청합니다.")
