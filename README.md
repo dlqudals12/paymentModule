@@ -30,7 +30,7 @@ Redis 의존성과 컨테이너 설정은 포함되어 있지만, 현재 결제 
 ### 결제 준비와 승인
 
 1. `POST /apis/v3/payments/ready`가 PG와 `orderId`를 받아 서버에서 금액을 계산하고 결제 시도를 `READY`로 저장합니다.
-2. 같은 주문에 `READY` 시도가 있으면 기존 시도를 재사용하고 금액을 갱신합니다. `FAILED` 시도는 이력으로 남기고 새 시도를 생성합니다. `PROCESSING`, `UNKNOWN`, `SUCCESS` 등은 다시 준비하지 않습니다.
+2. 같은 주문에 `READY` 시도가 있으면 금액을 갱신합니다. `FAILED`가 확정되면 같은 `Payment` 행의 이전 PG 키·멱등키를 정리하고 새 `READY` 시도로 재준비합니다. 이전 상태와 PG 호출은 이력·API 로그에 남습니다. `PROCESSING`, `UNKNOWN`, `SUCCESS` 등은 다시 준비하지 않습니다.
 3. 클라이언트가 반환된 주문 정보로 PG SDK를 실행하고, 인증 결과의 `paymentKey`, `orderId`, `amount`를 결제 승인 API에 전달합니다.
 4. `POST /apis/v3/payments`는 서버에서 다시 계산한 금액, 저장 금액, 전달 금액을 비교합니다. 결제 행을 잠근 짧은 트랜잭션에서 `READY → PROCESSING`으로 변경해 같은 주문의 중복 승인 요청을 막습니다.
 5. DB 트랜잭션 밖에서 PG 승인 API를 호출합니다. 정상 API 응답의 결제 상태는 서비스에서 처리하고, PG API 오류는 `PaymentException`으로 전달합니다. 승인 결과를 확정할 수 없는 호출 오류는 `UNKNOWN`으로 기록합니다.
@@ -53,15 +53,15 @@ PG별 요청·응답 처리는 `PaymentProcessor`로 분리하고 `PaymentProvid
 
 ### 새로고침, 중복 탭, 중복 승인
 
-SDK를 열기 전에 `ready`가 결제 시도를 저장합니다. 사용자가 결제창을 닫거나 새로고침한 뒤 같은 주문으로 다시 준비하면 `READY` 시도의 서버 금액을 갱신해 재사용합니다. 이미 `FAILED`가 된 시도는 보존하고 새 시도를 생성합니다. 그 외 진행 중이거나 성공한 시도는 `ready`로 덮어쓰지 않습니다.
+SDK를 열기 전에 `ready`가 결제 시도를 저장합니다. 사용자가 결제창을 닫거나 새로고침한 뒤 같은 주문으로 다시 준비하면 `READY` 시도의 서버 금액을 갱신합니다. `FAILED`가 확정된 시도는 같은 결제 행을 재준비하고 이전 상태는 이력·API 로그에 남깁니다. 그 외 진행 중이거나 성공한 시도는 `ready`로 덮어쓰지 않습니다.
 
-승인 시에는 `(provider, activeOrderId)` 고유 제약과 결제 행 잠금으로 같은 주문의 진행 가능한 시도를 하나로 제한합니다. PG 호출 전에 `PROCESSING`, 최초 SDK `paymentKey`, 요청 시각을 먼저 커밋합니다. 다른 탭이 다른 `paymentKey`로 들어오면 기존 시도를 이어받지 못하고 충돌로 처리합니다. 같은 키의 재진입은 새 승인을 보내기 전에 PG 조회로 기존 시도의 결과를 확인합니다. PG 요청에 사용하는 멱등키도 결제 시도에 저장합니다.
+승인 시에는 `orderId` 고유 제약과 결제 행 잠금으로 같은 주문의 현재 결제를 하나로 제한합니다. PG 호출 전에 `PROCESSING`, 최초 SDK `paymentKey`, 요청 시각을 먼저 커밋합니다. 다른 탭이 다른 `paymentKey`로 들어오면 기존 시도를 이어받지 못하고 충돌로 처리합니다. 같은 키의 재진입은 새 승인을 보내기 전에 PG 조회로 기존 시도의 결과를 확인합니다. PG 요청에 사용하는 멱등키도 결제 시도에 저장합니다.
 
 ### 호출 중단과 응답 유실 복구
 
 | 중단 지점 | 저장된 상태와 재진입 시 처리 |
 | --- | --- |
-| `PROCESSING` 커밋 후 PG 호출 전 종료 | 같은 결제 키로 다시 들어오면 PG를 조회합니다. 토스가 결제 부재를 명시한 404를 반환하면 5초 간격으로 두 번 더 확인합니다. 세 번 모두 결제 부재이면 `FAILED`로 저장하고 새 `ready`를 허용합니다. |
+| `PROCESSING` 커밋 후 PG 호출 전 종료 | 같은 결제 키로 다시 들어오면 PG를 조회합니다. 토스가 결제 부재를 명시한 404를 반환하면 5초 간격으로 두 번 더 확인합니다. 세 번 모두 결제 부재이면 `FAILED`로 저장하고 같은 행의 재준비를 허용합니다. |
 | PG 승인 후 결과 저장 전 응답 유실·프로세스 종료 | 로컬 상태가 `PROCESSING` 또는 `UNKNOWN`이면 같은 결제 키로 PG를 조회합니다. 성공 응답은 주문번호·금액·결제 키를 확인한 뒤 `SUCCESS`로 저장합니다. 조회 통신 오류처럼 결과가 불명확하면 상태를 유지합니다. |
 | `SUCCESS` 커밋 후 완료 이벤트 전달 실패 | `orderStatus=BEFORE`가 남습니다. 스케줄러가 결제 승인 시각부터 유예 시간이 지난 건의 완료 이벤트를 다시 발행합니다. |
 | 이벤트 수신 후 후속 업무 미완료 | `orderStatus=PENDING`을 유지합니다. 스케줄러가 상태 변경 시각부터 유예 시간이 지난 건의 이벤트를 다시 발행합니다. 실제 업무 완료 후 사용처가 `COMPLETE`로 확정해야 합니다. |
@@ -97,13 +97,13 @@ PG API 오류는 `BusinessException`을 상속한 `PaymentException`으로 전�
 | POST | `/apis/v3/auth/login` | 로그인 및 JWT 쿠키 발급 |
 | POST | `/apis/v3/auth/refresh` | JWT 쿠키 갱신 |
 | POST | `/apis/v3/auth/logout` | JWT 쿠키 삭제 |
-| POST | `/apis/v3/payments/ready` | 결제 준비 및 기존 `READY` 시도 재사용 |
+| POST | `/apis/v3/payments/ready` | 결제 준비, 기존 `READY` 금액 갱신 및 `FAILED` 행 재준비 |
 | POST | `/apis/v3/payments` | SDK 인증 결과 검증 및 PG 승인 |
 | GET | `/apis/v3/payments/toss/client-key` | 로그인한 브라우저에 공개용 토스 클라이언트 키 전달 |
 | GET | `/apis/v3/payments?page=0` | 로그인한 사용자의 결제 목록, 20건씩 최신순 조회 |
 | GET | `/apis/v3/payments/{paymentId}` | 로그인한 사용자의 결제 한 건 조회 |
 
-`ready` 요청은 `provider`, `orderId`를 사용합니다. 승인 요청은 `provider`, `orderId`, `paymentKey`, `amount`를 사용합니다. 결제 응답은 `paymentId`, `provider`, `orderId`, `amount`, `paymentStatus`, `orderStatus`를 포함하며 공통 성공 응답으로 감쌉니다.
+`ready` 요청은 `provider`, `orderId`를 사용합니다. 승인 요청은 `provider`, `orderId`, `externalPaymentId`, `amount`를 사용합니다. 프런트엔드는 토스 SDK가 반환한 `paymentKey`를 승인 요청의 `externalPaymentId`로 전달합니다. 결제 응답의 `id`는 내부 결제 PK이고 `externalPaymentId`는 PG 결제 키입니다. 응답에는 `provider`, `orderId`, `amount`, `paymentStatus`, `orderStatus`도 포함되며 공통 성공 응답으로 감쌉니다.
 
 ## 코드 구조
 
@@ -120,7 +120,9 @@ src/main/java/com/paymentModule/
 
 `PaymentService`는 결제 흐름을 조율하고, `PaymentTransactionService`는 결제 생성과 `writeResult()`의 상태·이력·로그 저장을 짧은 트랜잭션으로 처리합니다. `PaymentProcessor` 구현은 `PaymentProvider`를 키로 한 Bean 맵에서 선택하며, 현재 등록된 구현은 `TossPaymentProcessor`입니다.
 
-주요 테이블은 현재 결제 상태를 보관하는 `payment`, 상태 변경을 기록하는 `payment_history`, 실제 PG 호출 결과를 기록하는 `payment_api_log`입니다. 실패한 결제 행은 보존하고, 진행 가능한 결제 시도에는 `(provider, activeOrderId)` 고유 제약을 적용합니다.
+주요 테이블은 주문별 현재 결제 상태 한 행을 보관하는 `payment`, 상태 변경을 기록하는 `payment_history`, 실제 PG 호출 결과를 기록하는 `payment_api_log`입니다. 새로 만드는 DB에는 `orderId` 고유 제약을 적용합니다. 기존 DB는 `CREATE TABLE IF NOT EXISTS`로 제약이 바뀌지 않으므로 중복 주문 행 확인과 스키마 반영이 별도로 필요합니다.
+
+`payment.id`는 내부 PK, `payment.orderId`는 주문 ID, `payment.externalPaymentId`는 PG 결제 키입니다. 이력·API 로그의 `paymentId`는 내부 결제 PK를 참조하며, PG 결제 키는 `externalPaymentId`, PG 거래 키는 `transactionId`에 저장합니다. 이력·API 로그는 각 행의 `id`만 PK로 사용하고 결제 참조값과 PG 키에는 고유 제약을 두지 않습니다.
 
 ## 로컬 실행
 
@@ -257,5 +259,35 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 5. **결과:** 프런트 빌드와 린트, 백엔드 컴파일을 확인했습니다. 실제 PG 승인 흐름은 Docker·DB 및 토스 테스트 키를 갖춘 환경에서 확인해야 합니다.
 
 **당시 대화:** [React 결제 테스트 화면](docs/conversations/react-payment-test-frontend.txt)
+
+### 2026-11-23 · 실패한 결제의 같은 행 재준비
+
+1. **문제 사항:** `FAILED` 뒤 같은 주문으로 `ready`를 호출하면 새 `Payment` 행이 생겨 주문의 현재 결제가 여러 행으로 나뉘었습니다.
+2. **원인:** 실패 시 `activeOrderId`를 비우고, `ready`가 진행 가능한 행만 조회했습니다.
+3. **생각과 해결 방향:** `Payment`는 주문별 현재 상태 한 행으로 두고 이전 시도의 상태와 PG 호출 결과는 이력·API 로그에 보존합니다. 결과가 불확실한 `UNKNOWN`은 재준비하지 않습니다.
+4. **해결안:** `ready`가 주문 행을 잠가 `FAILED`를 같은 행의 `READY`로 전환하고 현재 PG 키·멱등키 등 시도 정보를 초기화합니다. 새 스키마에는 `orderId` 고유 제약을 정의합니다.
+5. **결과:** 실패가 확정된 주문은 같은 내부 결제 `id`로 다시 준비합니다. 기존 DB에는 고유 제약을 별도로 반영해야 합니다.
+
+**당시 대화:** [실패한 결제의 재준비](docs/conversations/ready-reuse-current-payment.txt)
+
+### 2026-11-23 · 결제 참조 ID와 PG 식별자 구분
+
+1. **문제 사항:** 이력·API 로그의 내부 결제 참조 컬럼이 `paymentPk`로 바뀌어 기존 `paymentId` 의미가 흐려졌습니다.
+2. **원인:** PG 결제 키에도 `paymentId`를 사용하면서 한 행의 두 식별자 이름이 충돌했습니다.
+3. **생각과 해결 방향:** 이력·로그의 `paymentId`는 내부 `Payment.id` 참조값으로 유지하고, PG 결제 키에는 별도 이름을 사용합니다. 여러 이력과 호출 로그가 한 결제에 연결되므로 이 컬럼들에는 고유 제약을 두지 않습니다.
+4. **해결안:** 이력·로그의 내부 참조를 `paymentId`로 복원하고 PG 결제 키를 `pgPaymentId`로 구분했습니다. 거래 키는 `transactionId`에 저장하며 엔티티·저장 코드·스키마·검증 코드를 맞췄습니다.
+5. **결과:** 이력과 API 로그는 각 행의 `id`만 PK이며 동일한 내부 결제 ID와 PG 키를 여러 행에 기록할 수 있습니다. 기존 DB의 컬럼 변경은 별도 반영이 필요합니다.
+
+**당시 대화:** [결제 식별자 명명](docs/conversations/payment-identifiers.txt)
+
+### 2026-11-23 · 외부 결제 식별자 명칭 통일
+
+1. **문제 사항:** PG 결제 식별자를 `Payment.paymentId`와 이력·로그의 `pgPaymentId`로 달리 표현해 내부 참조 `paymentId`와 혼동하기 쉬웠습니다.
+2. **원인:** `paymentId`가 테이블마다 내부 PK 참조와 PG 결제 키를 뜻했고, 이를 피하려 붙인 `pg` 접두사도 명확성이 부족했습니다.
+3. **생각과 해결 방향:** 내부 PK는 `Payment.id`, 이력·로그의 내부 참조는 `paymentId`로 유지하고 PG 결제 식별자는 모든 계층에서 `externalPaymentId`로 부릅니다.
+4. **해결안:** 엔티티, 스키마, 승인 요청·응답, PG 결과, 저장·복구 코드, 프런트엔드 전송 필드와 테스트를 같은 이름으로 변경했습니다. 토스 SDK의 `paymentKey`는 프런트엔드에서 매핑합니다.
+5. **결과:** 내부 참조와 PG 결제 키가 구분됩니다. 기존 DB에서는 `CREATE TABLE IF NOT EXISTS`가 컬럼을 변경하지 않으므로 별도 스키마 반영이 필요합니다.
+
+**당시 대화:** [외부 결제 식별자 명칭](docs/conversations/external-payment-id.txt)
 
 결제 상태 복구와 완료 이벤트 재전달은 `PaymentScheduler`와 `schedule.payments` 설정 아래에 모았습니다. 처리량에 따른 배치 크기나 실행 분산은 실제 호출량을 본 뒤 결정하기로 했습니다.

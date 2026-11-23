@@ -33,7 +33,7 @@ export async function readyPayment(orderId) {
 export async function approvePayment({ paymentKey, orderId, amount }) {
   const response = await api.post('/payments', {
     provider: 'TOSS',
-    paymentKey,
+    externalPaymentId: paymentKey,
     orderId,
     amount,
   })

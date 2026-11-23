@@ -45,7 +45,7 @@ function SuccessPage() {
       <h2>결제 결과</h2>
       <p role="status" className="notice">{message}</p>
       {result && <pre>{JSON.stringify(result, null, 2)}</pre>}
-      {result && <Link className="button-link secondary-link" to={`/payments/${result.paymentId}`}>저장된 결제 조회</Link>}
+      {result && <Link className="button-link secondary-link" to={`/payments/${result.id}`}>저장된 결제 조회</Link>}
       <Link className="button-link" to="/checkout">새 결제 테스트</Link>
     </section>
   )

@@ -12,12 +12,13 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Entity
 @Table(name = "payment", uniqueConstraints = {
         @UniqueConstraint(name = "uk_payment_idempotencyKey", columnNames = "idempotencyKey"),
-        @UniqueConstraint(name = "uk_payment_provider_transactionId", columnNames = {"provider", "transactionId"}),
-        @UniqueConstraint(name = "uk_payment_provider_activeOrderId", columnNames = {"provider", "activeOrderId"})
+        @UniqueConstraint(name = "uk_payment_provider_externalPaymentId", columnNames = {"provider", "externalPaymentId"}),
+        @UniqueConstraint(name = "uk_payment_orderId", columnNames = "orderId")
 }, comment = "결제 현재 상태 및 결제 결과 관리")
 @Getter
 @Builder
@@ -44,11 +45,11 @@ public class Payment extends BaseEntity {
     @Column(name = "orderId", nullable = false, length = 64, comment = "결제 요청과 승인에 사용하는 주문 식별자")
     private String orderId;
 
-    @Column(name = "activeOrderId", length = 64, comment = "진행 가능한 결제 시도의 주문 식별자. 실패한 시도는 비워 새 시도를 허용한다.")
+    @Column(name = "activeOrderId", length = 64, comment = "승인 가능한 현재 시도의 주문 식별자. 실패 확정 시 비우고 재준비 시 복원한다.")
     private String activeOrderId;
 
-    @Column(name = "transactionId", length = 255, comment = "외부 PG사에서 발급한 결제 식별자")
-    private String transactionId;
+    @Column(name = "externalPaymentId", length = 255, comment = "PG사에서 발급한 결제 식별자. 토스의 paymentKey")
+    private String externalPaymentId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "provider", nullable = false, length = 30, comment = "결제대행사 구분값")
@@ -113,21 +114,45 @@ public class Payment extends BaseEntity {
     }
 
     /**
+     * 실패가 확정된 주문을 같은 결제 행에서 새 SDK 시도로 준비한다.
+     */
+    public void retryReady(PaymentProvider provider, String loginId, Long amount) {
+        updatePaymentStatus(PaymentStatus.READY);
+
+        //이전 PG 키와 멱등키로 새 승인을 보내지 않도록 현재 시도 정보만 교체한다.
+        this.provider = provider;
+        this.loginId = loginId;
+        this.activeOrderId = orderId;
+        this.amount = amount;
+        this.externalPaymentId = null;
+        this.idempotencyKey = UUID.randomUUID().toString();
+        this.paymentMethod = null;
+        this.cancelledAmount = 0L;
+        this.orderStatus = OrderStatus.BEFORE;
+        this.orderStatusChangedAt = LocalDateTime.now();
+        this.failureCode = null;
+        this.failureMessage = null;
+        this.requestedAt = null;
+        this.approvedAt = null;
+        this.cancelledAt = null;
+    }
+
+    /**
      * 승인 요청을 시작했음을 기록한다. 네트워크 호출 전 별도 트랜잭션에서 확정한다.
      */
-    public void process(String transactionId) {
+    public void process(String externalPaymentId) {
         updatePaymentStatus(PaymentStatus.PROCESSING);
         //SDK에서 받은 PG 식별자를 먼저 저장해 다른 탭의 결제 키와 구별한다.
-        this.transactionId = transactionId;
+        this.externalPaymentId = externalPaymentId;
         this.requestedAt = LocalDateTime.now();
     }
 
     /**
      * 토스 승인 결과와 결제 식별자를 저장한다.
      */
-    public void approve(String transactionId, PaymentMethod paymentMethod, LocalDateTime approvedAt) {
+    public void approve(String externalPaymentId, PaymentMethod paymentMethod, LocalDateTime approvedAt) {
         updatePaymentStatus(PaymentStatus.SUCCESS);
-        this.transactionId = transactionId;
+        this.externalPaymentId = externalPaymentId;
         this.paymentMethod = paymentMethod;
         //PG 승인 시각이 없으면 서버에서 성공 결과를 확정한 시각을 사용한다.
         this.approvedAt = approvedAt == null ? LocalDateTime.now() : approvedAt;
@@ -138,9 +163,9 @@ public class Payment extends BaseEntity {
     /**
      * PG가 정상적으로 접수했지만 결제 완료를 기다리는 상태를 기록한다.
      */
-    public void pending(PaymentStatus status, String transactionId, PaymentMethod paymentMethod) {
+    public void pending(PaymentStatus status, String externalPaymentId, PaymentMethod paymentMethod) {
         updatePaymentStatus(status);
-        this.transactionId = transactionId;
+        this.externalPaymentId = externalPaymentId;
         this.paymentMethod = paymentMethod;
     }
 

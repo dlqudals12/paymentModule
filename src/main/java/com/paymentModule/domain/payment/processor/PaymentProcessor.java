@@ -42,5 +42,5 @@ public interface PaymentProcessor {
     /**
      * 저장된 결제 키로 실제 PG 결과를 조회한다. API 오류는 PaymentException으로 전달한다.
      */
-    PaymentProcessResult lookup(Payment payment, String paymentKey);
+    PaymentProcessResult lookup(Payment payment, String externalPaymentId);
 }

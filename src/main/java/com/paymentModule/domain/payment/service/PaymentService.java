@@ -103,7 +103,7 @@ public class PaymentService {
                 throw exception;
             }
 
-            return recover(unresolved, processor, request.getPaymentKey());
+            return recover(unresolved, processor, request.getExternalPaymentId());
         }
 
         if (payment.getPaymentStatus() == PaymentStatus.SUCCESS) {
@@ -178,21 +178,21 @@ public class PaymentService {
      * 스케줄러에서 저장된 결제 키로 미확정 결제의 PG 결과를 확인한다.
      */
     public PaymentResponse recover(Payment payment) {
-        return recover(payment, processor(payment.getProvider()), payment.getTransactionId());
+        return recover(payment, processor(payment.getProvider()), payment.getExternalPaymentId());
     }
 
     /**
      * 사용자 재요청과 스케줄러가 같은 PG 조회 및 결과 저장 흐름을 사용한다.
      */
-    private PaymentResponse recover(Payment payment, PaymentProcessor processor, String paymentKey) {
-        return recover(payment, processor, paymentKey, recoveryProperties.getNotFoundRetryCount());
+    private PaymentResponse recover(Payment payment, PaymentProcessor processor, String externalPaymentId) {
+        return recover(payment, processor, externalPaymentId, recoveryProperties.getNotFoundRetryCount());
     }
 
     /**
      * 결제 부재 404만 제한된 횟수로 다시 조회하고, 각 PG 호출은 별도 로그로 남긴다.
      */
     private PaymentResponse recover(Payment payment, PaymentProcessor processor,
-                                    String paymentKey, int remainingRetries) {
+                                    String externalPaymentId, int remainingRetries) {
         //최초 승인에 사용한 결제 키로 PG를 다시 조회하고 통신 시간을 별도로 기록한다.
         LocalDateTime requestedAt = LocalDateTime.now();
         long startedAt = System.nanoTime();
@@ -200,7 +200,7 @@ public class PaymentService {
         //조회 뒤 발생한 DB 예외를 PG 조회 예외와 구분한다.
         boolean apiResultReceived = false;
         try {
-            PaymentProcessResult result = Objects.requireNonNull(processor.lookup(payment, paymentKey));
+            PaymentProcessResult result = Objects.requireNonNull(processor.lookup(payment, externalPaymentId));
 
             Objects.requireNonNull(result.getStatus(), "PG 조회 결과에 상태가 없습니다.");
 
@@ -257,7 +257,7 @@ public class PaymentService {
                 paymentTransactionService.writeResult(payment, processor, result,
                         PaymentApiType.PAYMENT_LOOKUP, requestedAt, elapsedMillis(startedAt), pe, false);
                 waitBeforeNotFoundRetry();
-                return recover(payment, processor, paymentKey, remainingRetries - 1);
+                return recover(payment, processor, externalPaymentId, remainingRetries - 1);
             }
 
             //재조회까지 모두 결제 부재이거나 PG가 확정 실패를 알린 경우에만 상태를 변경한다.
@@ -311,11 +311,11 @@ public class PaymentService {
     private void publishCompleted(PaymentResponse response) {
         try {
             eventPublisher.publishEvent(new PaymentCompletedEvent(
-                    response.getPaymentId(), response.getProvider(),
+                    response.getId(), response.getProvider(),
                     response.getOrderId(), response.getAmount()));
         } catch (RuntimeException exception) {
             log.error("Payment completion event publication failed: paymentId={}",
-                    response.getPaymentId(), exception);
+                    response.getId(), exception);
         }
     }
 

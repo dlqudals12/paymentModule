@@ -106,7 +106,7 @@ function CheckoutPage() {
 
       {ready && (
         <div className="ready-box">
-          <p>결제 ID <strong>{ready.paymentId}</strong></p>
+          <p>결제 ID <strong>{ready.id}</strong></p>
           <p>주문번호 <strong>{ready.orderId}</strong></p>
           <p>서버 금액 <strong>{Number(ready.amount).toLocaleString('ko-KR')}원</strong></p>
           <p>상태 <strong>{ready.paymentStatus}</strong></p>

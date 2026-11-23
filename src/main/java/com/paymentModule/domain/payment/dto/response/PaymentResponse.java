@@ -13,7 +13,8 @@ import lombok.Getter;
 @Getter
 @Builder
 public class PaymentResponse {
-    private Long paymentId;
+    private Long id;
+    private String externalPaymentId;
     private PaymentProvider provider;
     private String orderId;
     private Long amount;
@@ -25,7 +26,8 @@ public class PaymentResponse {
      */
     public static PaymentResponse of(Payment payment) {
         return PaymentResponse.builder()
-                .paymentId(payment.getId())
+                .id(payment.getId())
+                .externalPaymentId(payment.getExternalPaymentId())
                 .provider(payment.getProvider())
                 .orderId(payment.getOrderId())
                 .amount(payment.getAmount())

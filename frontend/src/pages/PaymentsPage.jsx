@@ -36,8 +36,8 @@ function PaymentsPage() {
             <thead><tr><th>ID</th><th>주문번호</th><th>금액</th><th>결제 상태</th><th>주문 상태</th></tr></thead>
             <tbody>
               {result.content.map((payment) => (
-                <tr key={payment.paymentId}>
-                  <td><Link to={`/payments/${payment.paymentId}`}>{payment.paymentId}</Link></td>
+                <tr key={payment.id}>
+                  <td><Link to={`/payments/${payment.id}`}>{payment.id}</Link></td>
                   <td>{payment.orderId}</td>
                   <td>{Number(payment.amount).toLocaleString('ko-KR')}원</td>
                   <td>{payment.paymentStatus}</td>

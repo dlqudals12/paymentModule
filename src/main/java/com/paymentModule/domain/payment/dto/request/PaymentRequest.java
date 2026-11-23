@@ -18,7 +18,7 @@ public class PaymentRequest {
     private String orderId;
 
     @Size(max = 200)
-    private String paymentKey;
+    private String externalPaymentId;
 
     @NotNull
     @Positive

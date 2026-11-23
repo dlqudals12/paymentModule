@@ -74,7 +74,7 @@ public class TossPaymentProcessor implements PaymentProcessor {
      */
     @Override
     public void validate(PaymentRequest request) {
-        if (!StringUtils.hasText(request.getPaymentKey())) {
+        if (!StringUtils.hasText(request.getExternalPaymentId())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "토스 결제 키가 필요합니다.");
         }
 
@@ -88,7 +88,7 @@ public class TossPaymentProcessor implements PaymentProcessor {
      */
     @Override
     public PaymentProcessResult payment(Payment payment, PaymentRequest request) {
-        String paymentKey = request.getPaymentKey();
+        String paymentKey = request.getExternalPaymentId();
 
         //준비 단계에서 저장한 금액으로 토스 승인 요청
         TossApiResult<TossApiResponse> result = tossPaymentApi.confirm(TossConfirmRequest.builder()
@@ -133,7 +133,8 @@ public class TossPaymentProcessor implements PaymentProcessor {
             return PaymentProcessResult.builder()
                     .httpStatus(httpStatus)
                     .status(PaymentStatus.SUCCESS)
-                    .transactionId(approved.getPaymentKey())
+                    .externalPaymentId(approved.getPaymentKey())
+                    .transactionId(transactionKey(approved))
                     .paymentMethod(paymentMethod(approved.getMethod()))
                     .approvedAt(approvedAt(approved.getApprovedAt()))
                     .build();
@@ -144,7 +145,8 @@ public class TossPaymentProcessor implements PaymentProcessor {
             return PaymentProcessResult.builder()
                     .httpStatus(httpStatus)
                     .status(PaymentStatus.WAITING_FOR_PAYMENT)
-                    .transactionId(approved.getPaymentKey())
+                    .externalPaymentId(approved.getPaymentKey())
+                    .transactionId(transactionKey(approved))
                     .paymentMethod(paymentMethod(approved.getMethod()))
                     .build();
         }
@@ -160,7 +162,8 @@ public class TossPaymentProcessor implements PaymentProcessor {
         return PaymentProcessResult.builder()
                 .httpStatus(httpStatus)
                 .status(status)
-                .transactionId(approved.getPaymentKey())
+                .externalPaymentId(approved.getPaymentKey())
+                .transactionId(transactionKey(approved))
                 .paymentMethod(paymentMethod(approved.getMethod()))
                 .code("TOSS_NOT_DONE")
                 .message("토스 결제가 완료 상태가 아닙니다: " + approved.getStatus())
@@ -218,12 +221,22 @@ public class TossPaymentProcessor implements PaymentProcessor {
         return PaymentProcessResult.builder()
                 .httpStatus(httpStatus)
                 .status(status)
-                .transactionId(response.getPaymentKey())
+                .externalPaymentId(response.getPaymentKey())
+                .transactionId(transactionKey(response))
                 .paymentMethod(paymentMethod(response.getMethod()))
                 .approvedAt(status == PaymentStatus.SUCCESS ? approvedAt(response.getApprovedAt()) : null)
                 .code(status == PaymentStatus.SUCCESS ? null : "TOSS_LOOKUP_" + response.getStatus())
                 .message(status == PaymentStatus.SUCCESS ? null : "토스 결제 조회 상태: " + response.getStatus())
                 .build();
+    }
+
+    /**
+     * 결제 키와 별개인 토스의 최근 거래 키를 이력·통신 로그용으로 추출한다.
+     */
+    private String transactionKey(TossApiResponse response) {
+        //구 응답의 transactionKey는 최신 lastTransactionKey가 없을 때만 사용한다.
+        return StringUtils.hasText(response.getLastTransactionKey())
+                ? response.getLastTransactionKey() : response.getTransactionKey();
     }
 
     /**

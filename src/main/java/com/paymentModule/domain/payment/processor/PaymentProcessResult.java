@@ -15,6 +15,7 @@ import java.time.LocalDateTime;
 public class PaymentProcessResult {
     private Integer httpStatus;
     private PaymentStatus status;
+    private String externalPaymentId;
     private String transactionId;
     private PaymentMethod paymentMethod;
     private LocalDateTime approvedAt;

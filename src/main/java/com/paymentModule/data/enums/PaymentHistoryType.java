@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public enum PaymentHistoryType {
     CREATED("결제 생성"),
+    READY_RETRIED("결제 재준비"),
     PAYMENT_REQUESTED("결제 요청"),
     PAYMENT_PENDING("결제 대기"),
     PAYMENT_SUCCEEDED("결제 성공"),

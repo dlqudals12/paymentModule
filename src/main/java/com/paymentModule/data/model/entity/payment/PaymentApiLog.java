@@ -23,7 +23,7 @@ public class PaymentApiLog extends CreatedBaseEntity {
     @Column(name = "id", nullable = false, comment = "PG사 API 통신 로그 PK")
     private Long id;
 
-    @Column(name = "paymentId", nullable = false, comment = "결제 PK 참조값이며 DB 외래키 제약은 사용하지 않음")
+    @Column(name = "paymentId", nullable = false, comment = "결제 행 PK 참조값이며 DB 외래키 제약은 사용하지 않음")
     private Long paymentId;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -42,7 +42,10 @@ public class PaymentApiLog extends CreatedBaseEntity {
     @Column(name = "loginId", nullable = false, length = 255, comment = "API 호출 당시 사용자의 로그인 식별자")
     private String loginId;
 
-    @Column(name = "transactionId", length = 255, comment = "외부 PG사에서 발급한 결제 또는 거래 식별자")
+    @Column(name = "externalPaymentId", length = 255, comment = "PG사에서 발급한 결제 식별자")
+    private String externalPaymentId;
+
+    @Column(name = "transactionId", length = 255, comment = "PG사에서 발급한 승인 또는 취소 거래 식별자")
     private String transactionId;
 
     @Enumerated(EnumType.STRING)

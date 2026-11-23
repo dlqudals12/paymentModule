@@ -21,7 +21,7 @@ public class PaymentHistory extends CreatedBaseEntity {
     @Column(name = "id", nullable = false, comment = "결제 이력 PK")
     private Long id;
 
-    @Column(name = "paymentId", nullable = false, comment = "결제 PK 참조값이며 DB 외래키 제약은 사용하지 않음")
+    @Column(name = "paymentId", nullable = false, comment = "결제 행 PK 참조값이며 DB 외래키 제약은 사용하지 않음")
     private Long paymentId;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -58,8 +58,11 @@ public class PaymentHistory extends CreatedBaseEntity {
     @Column(name = "cumulativeCancelledAmount", comment = "해당 이력 발생 시점의 누적 취소 금액, 원 단위")
     private Long cumulativeCancelledAmount;
 
-    @Column(name = "providerTransactionId", length = 255, comment = "PG사에서 발급한 승인 또는 취소 거래 식별자")
-    private String providerTransactionId;
+    @Column(name = "externalPaymentId", length = 255, comment = "이력 발생 시점의 PG사 결제 식별자")
+    private String externalPaymentId;
+
+    @Column(name = "transactionId", length = 255, comment = "PG사에서 발급한 승인 또는 취소 거래 식별자")
+    private String transactionId;
 
     @Column(name = "resultCode", length = 100, comment = "PG사 처리 결과 코드")
     private String resultCode;

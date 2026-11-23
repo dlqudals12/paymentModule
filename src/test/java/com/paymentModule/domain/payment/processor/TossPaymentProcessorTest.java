@@ -47,7 +47,8 @@ class TossPaymentProcessorTest {
         assertEquals(1500L, captured.getValue().getAmount());
         assertEquals(PaymentStatus.SUCCESS, result.getStatus());
         assertEquals(PaymentMethod.CARD, result.getPaymentMethod());
-        assertEquals("payment_unit_001", result.getTransactionId());
+        assertEquals("payment_unit_001", result.getExternalPaymentId());
+        assertEquals("transaction_payment_unit_001", result.getTransactionId());
         assertEquals(200, result.getHttpStatus());
     }
 
@@ -142,7 +143,8 @@ class TossPaymentProcessorTest {
                 "payment_lookup_001");
 
         assertEquals(PaymentStatus.SUCCESS, result.getStatus());
-        assertEquals("payment_lookup_001", result.getTransactionId());
+        assertEquals("payment_lookup_001", result.getExternalPaymentId());
+        assertEquals("transaction_payment_lookup_001", result.getTransactionId());
         assertEquals(200, result.getHttpStatus());
     }
 
@@ -231,7 +233,7 @@ class TossPaymentProcessorTest {
     private PaymentRequest request(String orderId, String paymentKey, Long amount) {
         PaymentRequest request = new PaymentRequest();
         ReflectionTestUtils.setField(request, "orderId", orderId);
-        ReflectionTestUtils.setField(request, "paymentKey", paymentKey);
+        ReflectionTestUtils.setField(request, "externalPaymentId", paymentKey);
         ReflectionTestUtils.setField(request, "amount", amount);
         return request;
     }
@@ -244,6 +246,7 @@ class TossPaymentProcessorTest {
         TossApiResponse response = new TossApiResponse();
         response.setOrderId(orderId);
         response.setPaymentKey(paymentKey);
+        response.setLastTransactionKey("transaction_" + paymentKey);
         response.setTotalAmount(amount);
         response.setStatus(status);
         response.setMethod(TossPaymentMethod.CARD);

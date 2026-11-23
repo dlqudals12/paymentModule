@@ -1,0 +1,16 @@
+사용자: paymentId 이거 어떡하지 의미가 겹치긴 하는데 pgPaymentId도 좀 그렇고
+AI: 의미가 겹치는 게 맞습니다. **내부 결제 ID를 기준으로 이름을 정하는 게 가장 자연스럽습니다.**
+
+| 위치 | 이름 | 의미 |
+| --- | --- | --- |
+| `Payment` | `id` | 우리 DB의 결제 PK |
+| 이력·로그 | `paymentId` | `Payment.id` 참조 |
+| 결제·이력·로그 | `externalPaymentId` | PG가 발급한 결제 식별자 |
+| 이력·로그 | `transactionId` | PG의 개별 거래 식별자 |
+
+`pgPaymentId`보다 `externalPaymentId`를 추천합니다. 조금 길지만 어떤 ID인지 바로 읽히고, PG사별 명칭인 토스의 `paymentKey`에도 묶이지 않습니다. 지금 코드는 아직 `pgPaymentId`이므로, 이 이름으로 정하면 관련 필드를 함께 바꾸면 됩니다.
+사용자: transactionPaymentId는 좀 별로지?
+AI: 네, `transactionPaymentId`는 별로입니다. 결제 식별자인지 개별 거래 식별자인지 모호하고, 이미 있는 `transactionId`와도 헷갈립니다.
+
+`paymentId`는 내부 결제 참조, `externalPaymentId`는 PG 결제 식별자, `transactionId`는 개별 거래 식별자로 두는 편이 명확합니다.
+사용자: externalPaymentId로 변경하자 sql문이랑 다 변경해

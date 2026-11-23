@@ -28,6 +28,12 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     Optional<Payment> findByIdAndUserId(Long id, Long userId);
 
     /**
+     * 준비 단계에서 같은 주문의 현재 결제를 잠가 상태에 따른 재준비를 직렬화한다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<Payment> findByOrderId(String orderId);
+
+    /**
      * 동일 주문의 중복 승인 요청을 막기 위해 결제 행을 잠그고 조회한다.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -62,7 +68,7 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
             select payment from Payment payment
             where payment.paymentStatus in :statuses
               and payment.paymentStatusChangedAt < :cutoff
-              and payment.transactionId is not null
+              and payment.externalPaymentId is not null
             """)
     List<Payment> findProcessingRecoveryCandidates(
             @Param("statuses") List<PaymentStatus> statuses,
