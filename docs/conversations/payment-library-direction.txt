@@ -1,0 +1,7 @@
+사용자: 이 프로젝트의 Processor 단 라이브러리화 어케 생각함?
+AI: **지금 바로 `Processor`만 라이브러리로 분리하는 건 반대야.** 현재 `PaymentProcessor`가 `Payment` JPA 엔티티, 프로젝트의 요청 DTO·상태 enum·예외에 직접 의존해. JAR로 옮겨도 이 코드들을 함께 가져가야 해서, 독립적인 라이브러리 경계가 생기지는 않아.
+사용자: 이거를 spring boot 라이브러리로 만들고 설정파일도 가져가면 되잖음
+AI: 맞아. **이 프로젝트를 사용하는 Spring Boot 애플리케이션 전용 라이브러리**로 만들 거라면, `Payment` 엔티티·DTO·`PaymentProcessor`·토스 구현을 함께 담아도 돼. 내가 앞서 말한 “엔티티 의존성을 먼저 없애야 한다”는 건 *여러 결제 시스템에서 공통으로 쓰는 독립 PG 라이브러리*를 전제로 한 얘기였어. 네 목표에는 필수 조건이 아니야.
+사용자: 그냥 spring redis같은 spring 프레임워크에 종속적인 라이브러리로 만드려고
+AI: 아, 그러면 **Spring 의존성은 제거할 필요 없어.** 내가 목표를 순수 Java 라이브러리로 잘못 이해했어. Spring Data Redis처럼 Spring Boot 애플리케이션에서 사용하는 라이브러리라면 `RestClient`, `@ConfigurationProperties`, Bean 등록을 그대로 가져가면 돼.
+사용자: 내가 지금까지 고민했던 라이브러리화 방향이나 앞으로 더 나아가 PG사가 더 추가되면 완전히 라이브러리화 시키겠다는 방향으로 README에 적을 수 있음?

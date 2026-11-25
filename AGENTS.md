@@ -138,6 +138,8 @@
 - 주문 반영 실패나 이벤트 누락 시 미완료 상태를 재전달하되, 재전달을 받는 주문 업무는 `paymentId` 기준으로 중복 처리를 막는다.
 - PG 승인과 결제 결과 저장은 동기 처리한다. 성공 커밋 후 도메인 중립적인 완료 이벤트를 발행하고, 후속 업무는 수신 측에서 비동기로 처리한다.
 - PG별 승인 구현은 `PaymentProcessor`로 분리하고 `PaymentProvider`를 키로 한 Bean 맵에서 선택한다.
+- 결제 기능의 장기 목표는 Spring Framework 의존성을 허용하는 Spring Boot 라이브러리다. PG사가 추가되어 공통 처리와 PG별 차이를 확인한 뒤 전체 결제 기능의 라이브러리 분리를 검토한다. 현재 단일 프로젝트를 이미 배포 가능한 라이브러리로 설명하지 않는다.
+- `PaymentProcessor`의 승인·조회 입력에는 JPA `Payment` 엔티티 대신 공통 `PaymentProcessorData`를 전달한다. 이 DTO에는 결제 행의 스칼라 값과 감사 필드를 모두 복사하고 JPA 연관 객체는 포함하지 않는다.
 - 결제 대상 업무의 후속 완료 처리는 결제 모듈 밖에서 별도 트랜잭션으로 수행한다.
 - 결제 생성과 상태 변경은 `payment_history`에, 실제 PG 호출 결과는 `payment_api_log`에 기록한다. 인증 헤더와 민감한 요청·응답 원문은 저장하지 않는다.
 - PG 호출 전후의 DB 작업은 `PaymentTransactionService`의 별도 `@Transactional` 메서드로 처리하고, 외부 PG 호출은 트랜잭션 밖에서 실행한다.

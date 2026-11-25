@@ -8,7 +8,6 @@ import com.paymentModule.api.toss.enums.TossPaymentMethod;
 import com.paymentModule.api.toss.enums.TossPaymentStatus;
 import com.paymentModule.data.enums.PaymentMethod;
 import com.paymentModule.data.enums.PaymentStatus;
-import com.paymentModule.data.model.entity.payment.Payment;
 import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.global.exception.PaymentException;
 import com.paymentModule.global.properties.payments.TossApiProperties;
@@ -34,7 +33,7 @@ class TossPaymentProcessorTest {
     void confirmedPaymentUsesSavedAmount() {
         TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
         TossPaymentProcessor processor = processor(tossPaymentApi);
-        Payment payment = payment("order_unit_001", 1500L);
+        PaymentProcessorData payment = paymentData("order_unit_001", 1500L);
         PaymentRequest request = request("order_unit_001", "payment_unit_001", 1000L);
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.success(200,
@@ -64,7 +63,7 @@ class TossPaymentProcessorTest {
                         response("order_cancel_001", "payment_cancel_001", 1500L,
                                 TossPaymentStatus.CANCELED)));
 
-        PaymentProcessResult result = processor.payment(payment("order_cancel_001", 1500L),
+        PaymentProcessResult result = processor.payment(paymentData("order_cancel_001", 1500L),
                 request("order_cancel_001", "payment_cancel_001", 1500L));
 
         assertEquals(PaymentStatus.CANCELLED, result.getStatus());
@@ -82,7 +81,7 @@ class TossPaymentProcessorTest {
                         response("order_abort_001", "payment_abort_001", 1500L,
                                 TossPaymentStatus.ABORTED)));
 
-        PaymentProcessResult result = processor.payment(payment("order_abort_001", 1500L),
+        PaymentProcessResult result = processor.payment(paymentData("order_abort_001", 1500L),
                 request("order_abort_001", "payment_abort_001", 1500L));
 
         assertEquals(PaymentStatus.FAILED, result.getStatus());
@@ -99,7 +98,7 @@ class TossPaymentProcessorTest {
                 .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
 
         PaymentException exception = assertThrows(PaymentException.class,
-                () -> processor.payment(payment("order_error_001", 1500L),
+                () -> processor.payment(paymentData("order_error_001", 1500L),
                         request("order_error_001", "payment_error_001", 1500L)));
         PaymentProcessResult result = exception.getResult();
 
@@ -120,7 +119,7 @@ class TossPaymentProcessorTest {
                         response("order_mismatch_001", "payment_mismatch_001", 1400L,
                                 TossPaymentStatus.DONE)));
 
-        PaymentProcessResult result = processor.payment(payment("order_mismatch_001", 1500L),
+        PaymentProcessResult result = processor.payment(paymentData("order_mismatch_001", 1500L),
                 request("order_mismatch_001", "payment_mismatch_001", 1500L));
 
         assertEquals(PaymentStatus.UNKNOWN, result.getStatus());
@@ -139,7 +138,7 @@ class TossPaymentProcessorTest {
                         response("order_lookup_001", "payment_lookup_001", 1500L,
                                 TossPaymentStatus.DONE)));
 
-        PaymentProcessResult result = processor.lookup(payment("order_lookup_001", 1500L),
+        PaymentProcessResult result = processor.lookup(paymentData("order_lookup_001", 1500L),
                 "payment_lookup_001");
 
         assertEquals(PaymentStatus.SUCCESS, result.getStatus());
@@ -160,7 +159,7 @@ class TossPaymentProcessorTest {
                         response("order_lookup_mismatch_001", "payment_lookup_mismatch_001", 1400L,
                                 TossPaymentStatus.DONE)));
 
-        PaymentProcessResult result = processor.lookup(payment("order_lookup_mismatch_001", 1500L),
+        PaymentProcessResult result = processor.lookup(paymentData("order_lookup_mismatch_001", 1500L),
                 "payment_lookup_mismatch_001");
 
         assertEquals(PaymentStatus.UNKNOWN, result.getStatus());
@@ -178,7 +177,7 @@ class TossPaymentProcessorTest {
                 .thenReturn(TossApiResult.failure(404, "NOT_FOUND_PAYMENT", "결제를 찾을 수 없습니다."));
 
         PaymentException exception = assertThrows(PaymentException.class,
-                () -> processor.lookup(payment("order_not_found_001", 1500L),
+                () -> processor.lookup(paymentData("order_not_found_001", 1500L),
                         "payment_not_found_001"));
         PaymentProcessResult result = exception.getResult();
 
@@ -197,7 +196,7 @@ class TossPaymentProcessorTest {
                 .thenReturn(TossApiResult.failure(502, "TOSS_COMMUNICATION_ERROR", "통신 실패"));
 
         PaymentException exception = assertThrows(PaymentException.class,
-                () -> processor.lookup(payment("order_lookup_error_001", 1500L),
+                () -> processor.lookup(paymentData("order_lookup_error_001", 1500L),
                         "payment_lookup_error_001"));
         PaymentProcessResult result = exception.getResult();
 
@@ -219,8 +218,8 @@ class TossPaymentProcessorTest {
     /**
      * 승인 요청에 사용할 준비된 결제를 만든다.
      */
-    private Payment payment(String orderId, Long amount) {
-        return Payment.builder()
+    private PaymentProcessorData paymentData(String orderId, Long amount) {
+        return PaymentProcessorData.builder()
                 .orderId(orderId)
                 .amount(amount)
                 .idempotencyKey("idempotency-unit-001")

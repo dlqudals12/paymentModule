@@ -53,6 +53,14 @@ Redis 의존성과 컨테이너 설정은 포함되어 있지만, 현재 결제 
 
 PG별 요청·응답 처리는 `PaymentProcessor`로 분리하고 `PaymentProvider`를 키로 선택합니다. 반면 결제 이후 주문·상품 반영은 모듈이 업무 도메인을 알 수 없으므로 완료 이벤트를 전달하는 지점까지만 맡습니다. 사용처가 단일 애플리케이션이든 별도 주문 서비스든, 실제 후속 처리와 그 트랜잭션은 사용처에서 연결해야 합니다.
 
+### Spring Boot 결제 라이브러리로 발전시키는 방향
+
+이 프로젝트의 목표는 사용하는 서비스가 결제 기능을 붙일 수 있는 Spring Boot 라이브러리입니다. Spring Framework에 의존하는 방식으로 개발하며, `RestClient`, 설정 프로퍼티, Bean 등록을 없애는 순수 Java 라이브러리를 목표로 하지 않습니다. 현재는 실행 가능한 단일 Spring Boot 프로젝트이고 별도 라이브러리 JAR이나 자동 설정을 배포하고 있지는 않습니다.
+
+현재는 토스페이먼츠만 연결되어 있으므로 PG별 처리기를 `PaymentProcessor`로 나누고 `PaymentProvider`로 선택합니다. 승인·조회에는 JPA `Payment` 엔티티 대신 공통 `PaymentProcessorData`를 넘겨 PG 구현이 저장 엔티티를 직접 다루지 않도록 했습니다. 이 단계는 향후 분리를 위한 입력 경계이며, 현재 Processor의 요청 DTO·상태 enum·예외·설정은 여전히 프로젝트 코드와 연결되어 있습니다.
+
+PG사가 추가되어 공통 처리와 PG별 차이를 실제 구현으로 확인한 뒤 결제 기능을 라이브러리로 분리할 계획입니다. 그때 공통 계약·상태·결과 타입과 각 PG의 API 클라이언트·처리기·설정을 라이브러리 경계에 맞춰 옮기고, Bean 등록과 `@ConfigurationProperties` 바인딩을 사용하는 애플리케이션에서 적용할 수 있게 구성합니다. 결제 금액 확인과 결제 후 주문 반영은 사용처의 업무에 연결해야 하므로, 사용처가 제공할 지점을 함께 정리합니다. 라이브러리 분리와 추가 PG 지원은 아직 구현되지 않았습니다.
+
 ### 새로고침, 중복 탭, 중복 승인
 
 SDK를 열기 전에 `ready`가 결제 시도를 저장합니다. 사용자가 결제창을 닫거나 새로고침한 뒤 같은 주문으로 다시 준비하면 `READY` 시도의 서버 금액을 갱신합니다. `FAILED`가 확정된 시도는 같은 결제 행을 재준비하고 이전 상태는 이력·API 로그에 남깁니다. 그 외 진행 중이거나 성공한 시도는 `ready`로 덮어쓰지 않습니다.
@@ -81,7 +89,7 @@ PG 호출은 DB 트랜잭션 밖에서 실행하고, 호출 전후의 DB 변경�
 
 ### PG 오류와 결과 저장
 
-`PaymentProcessor`는 PG별 응답을 공통 `PaymentProcessResult`로 변환합니다. API 호출이 정상적으로 끝나 결제 상태를 받은 경우에는 결과를 반환합니다. PG API 오류는 상태, PG HTTP 상태, 오류 코드·메시지를 담은 `PaymentException`을 던집니다. 그 밖의 예상하지 못한 호출 예외는 서비스에서 따로 잡아 최초 승인 결과를 `UNKNOWN`으로 기록하고, 결과 조회 중이었다면 기존 결제 상태를 유지합니다. 정상 API 응답 뒤 DB 저장 중 발생한 예외는 PG 호출 오류로 다시 기록하지 않습니다.
+`PaymentProcessor`는 PG별 응답을 공통 `PaymentProcessResult`로 변환합니다. 승인·조회 시에는 JPA `Payment` 엔티티 대신 결제 행의 스칼라 값과 감사 필드를 복사한 `PaymentProcessorData`를 받습니다. JPA 연관 `User` 객체는 포함하지 않고 결제 행에 저장된 사용자 식별값만 전달합니다. API 호출이 정상적으로 끝나 결제 상태를 받은 경우에는 결과를 반환합니다. PG API 오류는 상태, PG HTTP 상태, 오류 코드·메시지를 담은 `PaymentException`을 던집니다. 그 밖의 예상하지 못한 호출 예외는 서비스에서 따로 잡아 최초 승인 결과를 `UNKNOWN`으로 기록하고, 결과 조회 중이었다면 기존 결제 상태를 유지합니다. 정상 API 응답 뒤 DB 저장 중 발생한 예외는 PG 호출 오류로 다시 기록하지 않습니다.
 
 `PaymentService`는 PG 호출과 결제 상태 분기를 같은 `try`에서 수행하고, `PaymentException`과 그 외 예외를 각각 처리합니다. DB 저장은 별도 트랜잭션의 `PaymentTransactionService.writeResult()`로 통일했습니다. 이 메서드는 결과 상태에 따라 `payment`와 `payment_history`를 갱신하고 PG 호출 결과를 `payment_api_log`에 기록합니다. 성공 결과에는 예외를 `null`로 전달하며, 예외 유무가 아닌 `PaymentProcessResult.status`로 결제 상태를 판단합니다. 조회 결과가 불확실하거나 404 재조회 중이면 결제 상태를 바꾸지 않고 API 로그만 남깁니다.
 
@@ -113,10 +121,10 @@ PG API 오류는 `BusinessException`을 상속한 `PaymentException`으로 전�
 ```text
 src/main/java/com/paymentModule/
 ├── api/toss/                         토스 RestClient, 요청·응답 DTO, 토스 enum
-├── config/                           Security, Swagger, PG 처리기 Bean 설정
+├── config/                           Security, Swagger 설정
 ├── data/                             엔티티, 저장소, 공통 응답·enum
 ├── domain/user/                      회원 인증 API와 서비스
-├── domain/payment/                   결제 API, 서비스, PG 처리기
+├── domain/payment/                   결제 API, 서비스, PG 처리기·레지스트리
 ├── event/payments/                   결제 완료 이벤트와 비동기 수신부
 └── global/                           설정 프로퍼티, 예외 처리, 인증·쿠키 유틸리티, 재전달 스케줄러
 ```
@@ -302,5 +310,25 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 5. **결과:** 확정 실패는 새 `READY`로, 기존 성공은 기존 성공 결과로 처리합니다. 불확실한 결제는 `UNKNOWN`을 유지합니다. 실제 PG 연동 검증은 실행 환경에서 확인해야 합니다.
 
 **당시 대화:** [결제 ID 기반 재결제 논의](docs/conversations/payment-retry-by-id.txt)
+
+### 2026-11-25 · PG 처리기 입력을 엔티티에서 분리
+
+1. **문제 사항:** `PaymentProcessor`의 승인·조회 계약이 JPA `Payment` 엔티티를 직접 받았습니다.
+2. **원인:** PG 구현이 저장 엔티티의 필드를 바로 읽도록 연결돼 처리기 입력을 별도 모듈로 옮기기 어려웠습니다.
+3. **생각과 해결 방향:** 모든 PG가 공통으로 받는 입력 DTO에 결제 행의 스칼라 값과 감사 필드를 모두 전달합니다. JPA 연관 `User` 객체는 넘기지 않고 저장된 `userId`와 `loginId`를 사용합니다.
+4. **해결안:** `PaymentProcessorData`를 추가하고 서비스에서 엔티티 값을 복사해 승인·조회에 전달했습니다. `PaymentProcessor`, 토스 구현, 단위 테스트의 입력 타입을 변경했습니다.
+5. **결과:** Processor의 승인·조회 메서드가 `Payment` 엔티티를 직접 참조하지 않습니다. 다른 입력 DTO와 공통 예외의 모듈 의존성은 이후 라이브러리 구성 시 별도로 판단합니다.
+
+**당시 대화:** [PG 처리기 입력 DTO](docs/conversations/payment-processor-data.txt)
+
+### 2026-11-25 · Spring Boot 결제 라이브러리 방향
+
+1. **문제 사항:** 현재 프로젝트가 PG 처리기 분리를 시작했지만 라이브러리화 목표와 완료 시점이 문서에 명시되지 않았습니다.
+2. **원인:** 단일 Spring Boot 프로젝트에서 토스 처리기만 구현한 상태라 공통 계약과 PG별 차이를 검증할 사례가 아직 하나뿐입니다.
+3. **생각과 해결 방향:** Spring Framework 의존성을 허용하는 결제 라이브러리를 목표로 합니다. PG사가 더 추가되면 공통 처리와 PG별 구현의 경계를 실제 코드로 확인해 라이브러리 분리를 진행합니다.
+4. **해결안:** 현재의 `PaymentProcessor`·`PaymentProcessorData` 경계, 별도 JAR·자동 설정이 아직 없는 점, 향후 PG 구현·설정·사용처 연결 지점의 분리 계획을 설계 항목에 기록했습니다.
+5. **결과:** 현재 구현과 앞으로의 라이브러리화 계획을 구분해 확인할 수 있습니다. 이번 항목은 설계 기록이며 라이브러리 빌드 구성은 변경하지 않았습니다.
+
+**당시 대화:** [Spring Boot 결제 라이브러리 방향](docs/conversations/payment-library-direction.txt)
 
 결제 상태 복구와 완료 이벤트 재전달은 `PaymentScheduler`와 `schedule.payments` 설정 아래에 모았습니다. 처리량에 따른 배치 크기나 실행 분산은 실제 호출량을 본 뒤 결정하기로 했습니다.

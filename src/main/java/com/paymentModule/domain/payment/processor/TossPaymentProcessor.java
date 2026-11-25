@@ -8,7 +8,6 @@ import com.paymentModule.api.toss.enums.TossPaymentMethod;
 import com.paymentModule.api.toss.enums.TossPaymentStatus;
 import com.paymentModule.data.enums.PaymentMethod;
 import com.paymentModule.data.enums.PaymentStatus;
-import com.paymentModule.data.model.entity.payment.Payment;
 import com.paymentModule.domain.payment.dto.request.PaymentReadyRequest;
 import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.global.exception.PaymentException;
@@ -87,7 +86,7 @@ public class TossPaymentProcessor implements PaymentProcessor {
      * 토스 결제 승인
      */
     @Override
-    public PaymentProcessResult payment(Payment payment, PaymentRequest request) {
+    public PaymentProcessResult payment(PaymentProcessorData payment, PaymentRequest request) {
         String paymentKey = request.getExternalPaymentId();
 
         //준비 단계에서 저장한 금액으로 토스 승인 요청
@@ -174,7 +173,7 @@ public class TossPaymentProcessor implements PaymentProcessor {
      * 같은 결제 키로 토스 상태를 조회하고 저장된 주문 정보와 대조한다.
      */
     @Override
-    public PaymentProcessResult lookup(Payment payment, String paymentKey) {
+    public PaymentProcessResult lookup(PaymentProcessorData payment, String paymentKey) {
         TossApiResult<TossApiResponse> result = tossPaymentApi.paymentByKey(paymentKey);
 
         //토스의 HTTP 응답이 없었던 오류는 내부 대체 상태 코드를 PG 응답으로 기록하지 않는다.

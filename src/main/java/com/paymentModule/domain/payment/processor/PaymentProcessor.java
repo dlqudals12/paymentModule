@@ -1,6 +1,5 @@
 package com.paymentModule.domain.payment.processor;
 
-import com.paymentModule.data.model.entity.payment.Payment;
 import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.domain.payment.dto.request.PaymentReadyRequest;
 import org.springframework.http.HttpMethod;
@@ -37,10 +36,10 @@ public interface PaymentProcessor {
     /**
      * 저장된 결제 정보로 PG 승인을 요청한다. API 오류는 PaymentException으로 전달한다.
      */
-    PaymentProcessResult payment(Payment payment, PaymentRequest request);
+    PaymentProcessResult payment(PaymentProcessorData payment, PaymentRequest request);
 
     /**
      * 저장된 결제 키로 실제 PG 결과를 조회한다. API 오류는 PaymentException으로 전달한다.
      */
-    PaymentProcessResult lookup(Payment payment, String externalPaymentId);
+    PaymentProcessResult lookup(PaymentProcessorData payment, String externalPaymentId);
 }

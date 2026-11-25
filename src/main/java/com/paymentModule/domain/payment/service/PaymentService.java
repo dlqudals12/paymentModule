@@ -1,7 +1,6 @@
 package com.paymentModule.domain.payment.service;
 
 import com.paymentModule.data.enums.PaymentApiType;
-import com.paymentModule.data.enums.PaymentProvider;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.data.model.entity.payment.Payment;
 import com.paymentModule.data.repository.payment.PaymentRepository;
@@ -10,23 +9,24 @@ import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.domain.payment.dto.response.PaymentResponse;
 import com.paymentModule.domain.payment.processor.PaymentProcessResult;
 import com.paymentModule.domain.payment.processor.PaymentProcessor;
+import com.paymentModule.domain.payment.processor.PaymentProcessorData;
+import com.paymentModule.domain.payment.processor.PaymentRegistry;
 import com.paymentModule.event.payments.PaymentCompletedEvent;
 import com.paymentModule.global.exception.PaymentException;
 import com.paymentModule.global.properties.payments.PaymentRecoveryProperties;
 import com.paymentModule.global.util.AuthUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
 public class PaymentService {
 
     private final PaymentTransactionService paymentTransactionService;
-    private final Map<PaymentProvider, PaymentProcessor> paymentProcessors;
+    private final PaymentRegistry paymentRegistry;
     private final ApplicationEventPublisher eventPublisher;
     private final PaymentRecoveryProperties recoveryProperties;
     private final PaymentRepository paymentRepository;
@@ -68,7 +68,7 @@ public class PaymentService {
      */
     public PaymentResponse register(PaymentReadyRequest request) {
         //PG별 주문번호 검증
-        processor(request.getProvider()).validateReady(request);
+        paymentRegistry.processor(request.getProvider()).validateReady(request);
 
         //주문 식별자로 금액을 계산하는 로직은 트랜잭션 서비스에서 호출한다.
         try {
@@ -100,7 +100,7 @@ public class PaymentService {
             }
 
             try {
-                PaymentResponse resolved = recover(current, processor(current.getProvider()),
+                PaymentResponse resolved = recover(current, paymentRegistry.processor(current.getProvider()),
                         current.getExternalPaymentId());
 
                 if (resolved.getPaymentStatus() == PaymentStatus.SUCCESS) {
@@ -123,7 +123,7 @@ public class PaymentService {
      */
     public PaymentResponse payment(PaymentRequest request) {
         //PG 처리기 선택 및 승인값 검증
-        PaymentProcessor processor = processor(request.getProvider());
+        PaymentProcessor processor = paymentRegistry.processor(request.getProvider());
         processor.validate(request);
 
         //승인 요청 전 상태를 별도 트랜잭션으로 저장
@@ -156,7 +156,7 @@ public class PaymentService {
         boolean apiResultReceived = false;
         try {
             //PG API 오류는 PaymentException으로 받고, 정상 응답의 결제 상태는 아래에서 처리한다.
-            PaymentProcessResult result = Objects.requireNonNull(processor.payment(payment, request));
+            PaymentProcessResult result = Objects.requireNonNull(processor.payment(processorData(payment), request));
 
             Objects.requireNonNull(result.getStatus(), "PG 결제 결과에 상태가 없습니다.");
             apiResultReceived = true;
@@ -216,7 +216,7 @@ public class PaymentService {
      * 스케줄러에서 저장된 결제 키로 미확정 결제의 PG 결과를 확인한다.
      */
     public PaymentResponse recover(Payment payment) {
-        return recover(payment, processor(payment.getProvider()), payment.getExternalPaymentId());
+        return recover(payment, paymentRegistry.processor(payment.getProvider()), payment.getExternalPaymentId());
     }
 
     /**
@@ -238,7 +238,7 @@ public class PaymentService {
         //조회 뒤 발생한 DB 예외를 PG 조회 예외와 구분한다.
         boolean apiResultReceived = false;
         try {
-            PaymentProcessResult result = Objects.requireNonNull(processor.lookup(payment, externalPaymentId));
+            PaymentProcessResult result = Objects.requireNonNull(processor.lookup(processorData(payment), externalPaymentId));
 
             Objects.requireNonNull(result.getStatus(), "PG 조회 결과에 상태가 없습니다.");
 
@@ -358,16 +358,37 @@ public class PaymentService {
     }
 
     /**
-     * PG 처리기 선택
+     * PG 구현에 JPA 엔티티를 넘기지 않고 결제 행의 현재 값을 복사한다.
      */
-    private PaymentProcessor processor(PaymentProvider provider) {
-        PaymentProcessor processor = paymentProcessors.get(provider);
-
-        if (processor == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "지원하지 않는 결제대행사입니다.");
-        }
-
-        return processor;
+    private PaymentProcessorData processorData(Payment payment) {
+        //연관 User 엔티티는 전달하지 않고 결제 행에 저장된 사용자 식별값만 복사한다.
+        return PaymentProcessorData.builder()
+                .id(payment.getId())
+                .userId(payment.getUserId())
+                .loginId(payment.getLoginId())
+                .orderId(payment.getOrderId())
+                .activeOrderId(payment.getActiveOrderId())
+                .externalPaymentId(payment.getExternalPaymentId())
+                .provider(payment.getProvider())
+                .paymentType(payment.getPaymentType())
+                .paymentMethod(payment.getPaymentMethod())
+                .paymentStatus(payment.getPaymentStatus())
+                .paymentStatusChangedAt(payment.getPaymentStatusChangedAt())
+                .orderStatus(payment.getOrderStatus())
+                .orderStatusChangedAt(payment.getOrderStatusChangedAt())
+                .amount(payment.getAmount())
+                .cancelledAmount(payment.getCancelledAmount())
+                .idempotencyKey(payment.getIdempotencyKey())
+                .failureCode(payment.getFailureCode())
+                .failureMessage(payment.getFailureMessage())
+                .requestedAt(payment.getRequestedAt())
+                .approvedAt(payment.getApprovedAt())
+                .cancelledAt(payment.getCancelledAt())
+                .createdBy(payment.getCreatedBy())
+                .createdAt(payment.getCreatedAt())
+                .updatedBy(payment.getUpdatedBy())
+                .updatedAt(payment.getUpdatedAt())
+                .build();
     }
 
     /**
