@@ -33,7 +33,7 @@ public interface PaymentProcessor {
      */
     PaymentProcessResult lookup(PaymentProcessorData payment, String externalPaymentId);
 
-    default int importantPoint() {
+    default int priority() {
         return 1;
     }
 

@@ -22,7 +22,7 @@ public class PaymentRegistry {
 
             //registry에 등록하지 않거나 등록하려는 프로세서가 중복인데 우선순위가 같거나 낮으면 건너뜀
             if (!processor.isRegistry() || (paymentProcessors.containsKey(provider)
-                    && paymentProcessors.get(provider).importantPoint() > processor.importantPoint())) {
+                    && paymentProcessors.get(provider).priority() > processor.priority())) {
                 continue;
             }
 
