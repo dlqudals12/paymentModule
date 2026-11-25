@@ -68,7 +68,7 @@ public class PaymentService {
      */
     public PaymentResponse register(PaymentReadyRequest request) {
         //PG별 주문번호 검증
-        paymentRegistry.processor(request.getProvider()).validateReady(request);
+        paymentRegistry.processor(request.getProvider()).orderIdValidation(request);
 
         //주문 식별자로 금액을 계산하는 로직은 트랜잭션 서비스에서 호출한다.
         try {
@@ -124,7 +124,7 @@ public class PaymentService {
     public PaymentResponse payment(PaymentRequest request) {
         //PG 처리기 선택 및 승인값 검증
         PaymentProcessor processor = paymentRegistry.processor(request.getProvider());
-        processor.validate(request);
+        processor.paymentValidation(request);
 
         //승인 요청 전 상태를 별도 트랜잭션으로 저장
         Payment payment;
@@ -165,14 +165,14 @@ public class PaymentService {
             if (result.getStatus() != PaymentStatus.SUCCESS
                     && result.getStatus() != PaymentStatus.PROCESSING
                     && result.getStatus() != PaymentStatus.WAITING_FOR_PAYMENT) {
-                paymentTransactionService.writeResult(payment, processor, result, PaymentApiType.PAYMENT,
+                paymentTransactionService.writeResult(payment, result, PaymentApiType.PAYMENT,
                         requestedAt, elapsedMillis(startedAt), null, true);
 
                 throw new ResponseStatusException(HttpStatus.CONFLICT, result.getMessage());
             }
 
             //PG 응답을 받은 뒤 별도 트랜잭션에서 결과를 저장하고 성공한 결제만 이벤트를 발행한다.
-            PaymentResponse response = paymentTransactionService.writeResult(payment, processor,
+            PaymentResponse response = paymentTransactionService.writeResult(payment,
                     result, PaymentApiType.PAYMENT, requestedAt, elapsedMillis(startedAt), null, true);
 
             //PG가 완료를 기다리는 결제에는 완료 이벤트를 보내지 않는다.
@@ -188,7 +188,7 @@ public class PaymentService {
             }
 
             //PG API 오류의 상태와 원래 오류 코드를 결제, 이력, 통신 로그에 기록한다.
-            paymentTransactionService.writeResult(payment, processor, paymentException.getResult(),
+            paymentTransactionService.writeResult(payment, paymentException.getResult(),
                     PaymentApiType.PAYMENT, requestedAt, elapsedMillis(startedAt), paymentException, true);
 
             throw paymentException;
@@ -205,7 +205,7 @@ public class PaymentService {
                     .message("PG 승인 호출 중 예외가 발생했습니다.")
                     .build();
 
-            paymentTransactionService.writeResult(payment, processor, unknown, PaymentApiType.PAYMENT,
+            paymentTransactionService.writeResult(payment, unknown, PaymentApiType.PAYMENT,
                     requestedAt, elapsedMillis(startedAt), unexpectedException, true);
 
             throw new ResponseStatusException(HttpStatus.CONFLICT, "PG 승인 결과를 확인할 수 없습니다.", unexpectedException);
@@ -247,7 +247,7 @@ public class PaymentService {
             long durationMs = elapsedMillis(startedAt);
             //조회 성공으로 승인을 확인한 경우에만 상태 확정 후 완료 이벤트를 발행한다.
             if (result.getStatus() == PaymentStatus.SUCCESS) {
-                PaymentResponse response = paymentTransactionService.writeResult(payment, processor,
+                PaymentResponse response = paymentTransactionService.writeResult(payment,
                         result, PaymentApiType.PAYMENT_LOOKUP, requestedAt, durationMs, null, true);
 
                 publishCompleted(response);
@@ -258,7 +258,7 @@ public class PaymentService {
             if (result.getStatus() == PaymentStatus.FAILED
                     || result.getStatus() == PaymentStatus.CANCELLED
                     || result.getStatus() == PaymentStatus.PARTIAL_CANCELLED) {
-                paymentTransactionService.writeResult(payment, processor, result,
+                paymentTransactionService.writeResult(payment, result,
                         PaymentApiType.PAYMENT_LOOKUP, requestedAt, durationMs, null, true);
 
                 throw new ResponseStatusException(HttpStatus.CONFLICT, result.getMessage());
@@ -270,12 +270,12 @@ public class PaymentService {
                 boolean statusChanged = payment.getPaymentStatus() != result.getStatus()
                         && payment.getPaymentStatus() != PaymentStatus.WAITING_FOR_PAYMENT;
 
-                return paymentTransactionService.writeResult(payment, processor, result,
+                return paymentTransactionService.writeResult(payment, result,
                         PaymentApiType.PAYMENT_LOOKUP, requestedAt, durationMs, null, statusChanged);
             }
 
             //조회 결과가 불확실하면 실제 PG 통신만 기록하고 기존 결제 상태를 유지한다.
-            paymentTransactionService.writeResult(payment, processor, result,
+            paymentTransactionService.writeResult(payment, result,
                     PaymentApiType.PAYMENT_LOOKUP, requestedAt, durationMs, null, false);
 
             throw new ResponseStatusException(HttpStatus.CONFLICT, "PG 결제 결과를 아직 확인할 수 없습니다.");
@@ -292,7 +292,7 @@ public class PaymentService {
 
             if (notFound && remainingRetries > 0) {
                 //이번 404는 기록하되 실패로 확정하지 않고, 정해진 간격 뒤 같은 결제 키를 재조회한다.
-                paymentTransactionService.writeResult(payment, processor, result,
+                paymentTransactionService.writeResult(payment, result,
                         PaymentApiType.PAYMENT_LOOKUP, requestedAt, elapsedMillis(startedAt), pe, false);
                 waitBeforeNotFoundRetry();
                 return recover(payment, processor, externalPaymentId, remainingRetries - 1);
@@ -303,7 +303,7 @@ public class PaymentService {
                     || result.getStatus() == PaymentStatus.CANCELLED
                     || result.getStatus() == PaymentStatus.PARTIAL_CANCELLED);
 
-            paymentTransactionService.writeResult(payment, processor, result,
+            paymentTransactionService.writeResult(payment, result,
                     PaymentApiType.PAYMENT_LOOKUP, requestedAt, elapsedMillis(startedAt), pe, confirmedFailure);
 
             if (notFound) {
@@ -324,7 +324,7 @@ public class PaymentService {
                     .message("PG 결제 결과 조회 중 예외가 발생했습니다.")
                     .build();
 
-            paymentTransactionService.writeResult(payment, processor, unknown,
+            paymentTransactionService.writeResult(payment, unknown,
                     PaymentApiType.PAYMENT_LOOKUP, requestedAt, elapsedMillis(startedAt), e, false);
 
             throw new ResponseStatusException(HttpStatus.CONFLICT, "PG 결제 결과를 확인할 수 없습니다.", e);

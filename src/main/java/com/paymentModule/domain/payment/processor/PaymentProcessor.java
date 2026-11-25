@@ -1,37 +1,27 @@
 package com.paymentModule.domain.payment.processor;
 
-import com.paymentModule.domain.payment.dto.request.PaymentRequest;
+import com.paymentModule.data.enums.PaymentProvider;
 import com.paymentModule.domain.payment.dto.request.PaymentReadyRequest;
-import org.springframework.http.HttpMethod;
+import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 
 /**
  * PG별 승인 요청을 공통 결제 결과로 변환하는 계약이다.
  */
 public interface PaymentProcessor {
     /**
-     * 결제 API 주소
+     * PG 타입
      */
-    String paymentUrl();
-
-    /**
-     * 결제 API HTTP 메서드
-     */
-    HttpMethod requestMethod();
-
-    /**
-     * 결제 결과 조회 API 주소를 반환한다.
-     */
-    String lookupUrl();
+    PaymentProvider provider();
 
     /**
      * PG별 주문 식별자 형식을 결제 준비 전에 검증한다.
      */
-    void validateReady(PaymentReadyRequest request);
+    void orderIdValidation(PaymentReadyRequest request);
 
     /**
      * PG별 필수 인증값을 외부 승인 요청 전에 검증한다.
      */
-    void validate(PaymentRequest request);
+    void paymentValidation(PaymentRequest request);
 
     /**
      * 저장된 결제 정보로 PG 승인을 요청한다. API 오류는 PaymentException으로 전달한다.
@@ -42,4 +32,15 @@ public interface PaymentProcessor {
      * 저장된 결제 키로 실제 PG 결과를 조회한다. API 오류는 PaymentException으로 전달한다.
      */
     PaymentProcessResult lookup(PaymentProcessorData payment, String externalPaymentId);
+
+    default int importantPoint() {
+        return 1;
+    }
+
+    /**
+     * Registry 등록 여부
+     */
+    default boolean isRegistry() {
+        return true;
+    }
 }

@@ -56,7 +56,7 @@ public class PaymentApiLog extends CreatedBaseEntity {
     @Column(name = "apiType", nullable = false, length = 50, comment = "PG사 API 호출 유형")
     private PaymentApiType apiType;
 
-    @Column(name = "httpMethod", nullable = false, length = 10, comment = "PG사 API 요청 HTTP 메서드")
+    @Column(name = "httpMethod", nullable = false, length = 10, comment = "PG사 API 요청 HTTP 메서드. 확인할 수 없으면 UNKNOWN")
     private String httpMethod;
 
     @Column(name = "requestUrl", nullable = false, length = 1000, comment = "호출한 PG사 API 주소")
@@ -65,7 +65,7 @@ public class PaymentApiLog extends CreatedBaseEntity {
     @Column(name = "requestHeader", columnDefinition = "LONGTEXT", comment = "PG사 API 요청 헤더이며 인증정보와 민감정보는 저장 전 마스킹")
     private String requestHeader;
 
-    @Column(name = "requestBody", columnDefinition = "LONGTEXT", comment = "PG사 API 요청 본문이며 개인정보와 결제정보는 저장 전 마스킹")
+    @Column(name = "requestBody", columnDefinition = "LONGTEXT", comment = "민감정보를 제외하고 선별한 PG사 API 요청 JSON")
     private String requestBody;
 
     @Column(name = "responseStatus", comment = "PG사 API HTTP 응답 상태 코드")
@@ -74,7 +74,7 @@ public class PaymentApiLog extends CreatedBaseEntity {
     @Column(name = "responseHeader", columnDefinition = "LONGTEXT", comment = "PG사 API 응답 헤더이며 민감정보는 저장 전 마스킹")
     private String responseHeader;
 
-    @Column(name = "responseBody", columnDefinition = "LONGTEXT", comment = "PG사 API 응답 본문이며 개인정보와 결제정보는 저장 전 마스킹")
+    @Column(name = "responseBody", columnDefinition = "LONGTEXT", comment = "민감정보를 제외하고 선별한 PG사 API 응답 JSON")
     private String responseBody;
 
     @Builder.Default

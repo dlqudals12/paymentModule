@@ -13,11 +13,14 @@ import com.paymentModule.global.exception.PaymentException;
 import com.paymentModule.global.properties.payments.TossApiProperties;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpMethod;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -45,6 +48,14 @@ class TossPaymentProcessorTest {
         verify(tossPaymentApi).confirm(captured.capture(), eq("idempotency-unit-001"));
         assertEquals(1500L, captured.getValue().getAmount());
         assertEquals(PaymentStatus.SUCCESS, result.getStatus());
+        assertEquals(1, result.getApiCalls().size());
+        assertEquals(HttpMethod.POST, result.getApiCalls().getFirst().getHttpMethod());
+        assertEquals("https://api.tosspayments.com/v1/payments/confirm",
+                result.getApiCalls().getFirst().getRequestUrl());
+        assertEquals("{\"orderId\":\"order_unit_001\",\"amount\":1500}",
+                result.getApiCalls().getFirst().getRequestBody());
+        assertTrue(result.getApiCalls().getFirst().getResponseBody().contains("\"status\":\"DONE\""));
+        assertFalse(result.getApiCalls().getFirst().getResponseBody().contains("paymentKey"));
         assertEquals(PaymentMethod.CARD, result.getPaymentMethod());
         assertEquals("payment_unit_001", result.getExternalPaymentId());
         assertEquals("transaction_payment_unit_001", result.getTransactionId());
@@ -103,6 +114,11 @@ class TossPaymentProcessorTest {
         PaymentProcessResult result = exception.getResult();
 
         assertEquals(PaymentStatus.UNKNOWN, result.getStatus());
+        assertEquals(HttpMethod.POST, result.getApiCalls().getFirst().getHttpMethod());
+        assertEquals("https://api.tosspayments.com/v1/payments/confirm",
+                result.getApiCalls().getFirst().getRequestUrl());
+        assertTrue(result.getApiCalls().getFirst().getResponseBody()
+                .contains("\"code\":\"TOSS_COMMUNICATION_ERROR\""));
         assertNull(result.getHttpStatus());
         assertEquals("TOSS_COMMUNICATION_ERROR", result.getCode());
     }
@@ -142,6 +158,11 @@ class TossPaymentProcessorTest {
                 "payment_lookup_001");
 
         assertEquals(PaymentStatus.SUCCESS, result.getStatus());
+        assertEquals(HttpMethod.GET, result.getApiCalls().getFirst().getHttpMethod());
+        assertEquals("https://api.tosspayments.com/v1/payments/payment_lookup_001",
+                result.getApiCalls().getFirst().getRequestUrl());
+        assertNull(result.getApiCalls().getFirst().getRequestBody());
+        assertTrue(result.getApiCalls().getFirst().getResponseBody().contains("\"status\":\"DONE\""));
         assertEquals("payment_lookup_001", result.getExternalPaymentId());
         assertEquals("transaction_payment_lookup_001", result.getTransactionId());
         assertEquals(200, result.getHttpStatus());
@@ -182,6 +203,9 @@ class TossPaymentProcessorTest {
         PaymentProcessResult result = exception.getResult();
 
         assertEquals(PaymentStatus.FAILED, result.getStatus());
+        assertEquals(HttpMethod.GET, result.getApiCalls().getFirst().getHttpMethod());
+        assertEquals("https://api.tosspayments.com/v1/payments/payment_not_found_001",
+                result.getApiCalls().getFirst().getRequestUrl());
         assertEquals(404, result.getHttpStatus());
     }
 
@@ -211,7 +235,7 @@ class TossPaymentProcessorTest {
         TossApiProperties properties = new TossApiProperties();
         properties.setBaseUrl("https://api.tosspayments.com");
         properties.setPath(new TossApiProperties.Path(
-                "/v1/payments/confirm", "", "", "", ""));
+                "/v1/payments/confirm", "/v1/payments/{paymentKey}", "", "", ""));
         return new TossPaymentProcessor(tossPaymentApi, properties);
     }
 

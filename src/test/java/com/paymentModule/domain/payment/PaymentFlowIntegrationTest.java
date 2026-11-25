@@ -217,8 +217,10 @@ class PaymentFlowIntegrationTest {
         assertEquals("POST", log.getHttpMethod());
         assertEquals("https://api.tosspayments.com/v1/payments/confirm", log.getRequestUrl());
         assertNull(log.getRequestHeader());
-        assertNull(log.getRequestBody());
-        assertNull(log.getResponseBody());
+        assertEquals("{\"orderId\":\"order_success_001\",\"amount\":" + READY_AMOUNT + "}",
+                log.getRequestBody());
+        assertTrue(log.getResponseBody().contains("\"status\":\"DONE\""));
+        assertFalse(log.getResponseBody().contains("paymentKey"));
         PaymentCompletedEvent event = applicationEvents.stream(PaymentCompletedEvent.class)
                 .findFirst().orElseThrow();
         assertEquals(ready.getId(), event.paymentId());
@@ -505,6 +507,8 @@ class PaymentFlowIntegrationTest {
         assertEquals(409, exception.getStatusCode().value());
         assertEquals(PaymentStatus.UNKNOWN,
                 paymentRepository.findById(ready.getId()).orElseThrow().getPaymentStatus());
+        assertEquals("UNKNOWN", paymentApiLogRepository.findAll().getFirst().getHttpMethod());
+        assertEquals("UNKNOWN", paymentApiLogRepository.findAll().getFirst().getRequestUrl());
         assertEquals("IllegalStateException", paymentApiLogRepository.findAll().getFirst().getErrorType());
     }
 

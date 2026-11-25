@@ -5,6 +5,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Component
@@ -12,9 +14,22 @@ public class PaymentRegistry {
 
     private final Map<PaymentProvider, PaymentProcessor> paymentProcessors;
 
-    public PaymentRegistry(TossPaymentProcessor tossPaymentProcessor) {
-        this.paymentProcessors = Map.of(PaymentProvider.TOSS, tossPaymentProcessor);
-        ;
+    public PaymentRegistry(List<PaymentProcessor> processors) {
+        HashMap<PaymentProvider, PaymentProcessor> paymentProcessors = new HashMap<>();
+
+        for (PaymentProcessor processor : processors) {
+            PaymentProvider provider = processor.provider();
+
+            //registry에 등록하지 않거나 등록하려는 프로세서가 중복인데 우선순위가 같거나 낮으면 건너뜀
+            if (!processor.isRegistry() || (paymentProcessors.containsKey(provider)
+                    && paymentProcessors.get(provider).importantPoint() > processor.importantPoint())) {
+                continue;
+            }
+
+            paymentProcessors.put(provider, processor);
+        }
+
+        this.paymentProcessors = paymentProcessors;
     }
 
     /**

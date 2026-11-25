@@ -1,0 +1,11 @@
+사용자: 우리 api 쏘면 실제 request response db에 저장 안하나?
+AI: 현재 구현은 **요청·응답 원문을 DB에 저장하지 않습니다.** `payment_api_log`에는 결제 흐름에서 Processor를 통해 호출한 API의 요청 URL·HTTP 메서드, 응답 상태 코드, 오류 코드·메시지, 호출 시각과 소요 시간 등을 저장합니다. `requestHeader`, `requestBody`, `responseHeader`, `responseBody` 컬럼은 있지만 값을 넣지 않고 있습니다.
+
+또한 TossPaymentApi.java를 직접 호출하는 경우에는 현재 `payment_api_log` 저장 경로를 거치지 않습니다.
+
+사용자: PaymentApiCallResult 여기에 request class response class 나온거 json으로 변환해서 String 반한 한 뒤에 넣는게 맞지 않나?
+AI: 맞아요. **API 호출 한 건의 요청·응답을 추적하려면** `PaymentApiCallResult`에 `requestBody`와 `responseBody`를 JSON 문자열로 담고, 각 항목을 `payment_api_log`에 저장하는 구조가 자연스럽습니다. 지금은 두 컬럼에 값을 넣지 않아 실제 내용을 확인할 수 없습니다.
+
+다만 요청·응답 DTO 전체를 그대로 직렬화하면 민감정보까지 저장될 수 있습니다. 현재 프로젝트 지침도 민감한 원문 저장을 금지하므로, **로그에 필요한 필드만 선별하거나 마스킹한 뒤 JSON으로 변환**하는 방식이 맞습니다. 오류 응답도 호출별 `responseBody`에 담으면 추적에 도움이 됩니다.
+
+사용자: ㄱㄱ

@@ -12,7 +12,7 @@ import com.paymentModule.domain.payment.dto.request.PaymentReadyRequest;
 import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.domain.payment.dto.response.PaymentResponse;
 import com.paymentModule.domain.payment.processor.PaymentProcessResult;
-import com.paymentModule.domain.payment.processor.PaymentProcessor;
+import com.paymentModule.domain.payment.processor.PaymentApiCallResult;
 import com.paymentModule.global.exception.PaymentException;
 import com.paymentModule.global.util.AuthUtil;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.Objects;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -199,7 +200,7 @@ public class PaymentTransactionService {
      * PG 승인·조회 결과를 결제 상태, 이력, 통신 로그에 저장한다.
      */
     @Transactional
-    public PaymentResponse writeResult(Payment previous, PaymentProcessor processor, PaymentProcessResult result,
+    public PaymentResponse writeResult(Payment previous, PaymentProcessResult result,
                                        PaymentApiType apiType, LocalDateTime requestedAt,
                                        long durationMs, Exception exception, boolean updateStatus) {
         //사용자 API는 앞 단계에서 소유자를 확인한다. 스케줄러도 호출할 수 있도록 결제 PK로 잠근다.
@@ -217,7 +218,7 @@ public class PaymentTransactionService {
                 && result.getStatus() == PaymentStatus.SUCCESS
                 && Objects.equals(current.getExternalPaymentId(), result.getExternalPaymentId())) {
             //다른 요청이 같은 결제 키의 성공을 먼저 확정했다면 이력은 중복 생성하지 않는다.
-            saveApiLog(current, processor, result, apiType, requestedAt, durationMs, exception);
+            saveApiLog(current, result, apiType, requestedAt, durationMs, exception);
             return PaymentResponse.of(current);
         }
 
@@ -263,7 +264,7 @@ public class PaymentTransactionService {
         }
 
         //조회 결과가 불확실한 경우에도 실제 PG 통신 기록은 남긴다.
-        saveApiLog(current, processor, result, apiType, requestedAt, durationMs, exception);
+        saveApiLog(current, result, apiType, requestedAt, durationMs, exception);
 
         //상태 변경 여부와 관계없이 잠금 안에서 확인한 최신 결제를 응답으로 만든다.
         return PaymentResponse.of(current);
@@ -378,35 +379,63 @@ public class PaymentTransactionService {
     /**
      * PG API 호출 결과 저장
      */
-    private void saveApiLog(Payment payment, PaymentProcessor processor, PaymentProcessResult result,
+    private void saveApiLog(Payment payment, PaymentProcessResult result,
                             PaymentApiType apiType, LocalDateTime requestedAt,
                             long durationMs, Exception exception) {
-        //인증 헤더와 결제 본문에는 민감정보가 있으므로 로그 테이블에 저장하지 않는다.
+        //Processor가 여러 PG API를 호출했다면 실행 순서대로 각각의 통신 결과를 저장한다.
+        List<PaymentApiCallResult> apiCalls = result.getApiCalls();
+        if (apiCalls == null || apiCalls.isEmpty()) {
+            //호출 결과를 만들기 전에 예외가 발생한 경우 실제 요청 정보를 추정하지 않는다.
+            apiCalls = List.of(PaymentApiCallResult.builder()
+                    .apiType(apiType)
+                    .code(result.getCode())
+                    .message(result.getMessage())
+                    .requestedAt(requestedAt)
+                    .durationMs(durationMs)
+                    .build());
+        }
+
+        for (int index = 0; index < apiCalls.size(); index++) {
+            PaymentApiCallResult call = apiCalls.get(index);
+            boolean lastCall = index == apiCalls.size() - 1;
+            saveApiCall(payment, result, call, lastCall, exception);
+        }
+    }
+
+    /**
+     * PG API 호출 한 건을 결제 행과 연결해 저장한다.
+     */
+    private void saveApiCall(Payment payment, PaymentProcessResult result,
+                             PaymentApiCallResult call, boolean lastCall, Exception exception) {
+        //호출별 본문에는 PG 처리기가 선별한 JSON만 저장하고 인증 헤더는 저장하지 않는다.
+        String errorCode = call.getCode() == null && lastCall ? result.getCode() : call.getCode();
+        String errorMessage = call.getMessage() == null && lastCall ? result.getMessage() : call.getMessage();
+
         paymentApiLogRepository.save(PaymentApiLog.builder()
                 .paymentId(payment.getId())
                 .userId(payment.getUserId())
                 .loginId(payment.getLoginId())
-                .externalPaymentId(result.getExternalPaymentId() == null
-                        ? payment.getExternalPaymentId() : result.getExternalPaymentId())
-                .transactionId(result.getTransactionId())
+                .externalPaymentId(call.getExternalPaymentId() == null
+                        ? payment.getExternalPaymentId() : call.getExternalPaymentId())
+                .transactionId(call.getTransactionId())
                 .provider(payment.getProvider())
-                .apiType(apiType)
-                .httpMethod(apiType == PaymentApiType.PAYMENT_LOOKUP ? "GET" : processor.requestMethod().name())
-                .requestUrl(apiType == PaymentApiType.PAYMENT_LOOKUP
-                        ? processor.lookupUrl() : processor.paymentUrl())
-                .responseStatus(result.getHttpStatus())
-                .successYn(result.getHttpStatus() != null && result.getHttpStatus() >= 200
-                        && result.getHttpStatus() < 300
-                        && (result.getStatus() == PaymentStatus.SUCCESS
-                        || result.getStatus() == PaymentStatus.PROCESSING
-                        || result.getStatus() == PaymentStatus.WAITING_FOR_PAYMENT))
-                .durationMs(durationMs)
+                .apiType(call.getApiType())
+                //PG 결과가 없는 예상 밖 예외에는 실제 요청 메서드를 추정하지 않는다.
+                .httpMethod(call.getHttpMethod() == null ? "UNKNOWN" : call.getHttpMethod().name())
+                //PG 결과가 만들어지기 전 예외에는 실제 요청 URL을 추정하지 않는다.
+                .requestUrl(call.getRequestUrl() == null ? "UNKNOWN" : call.getRequestUrl())
+                .requestBody(call.getRequestBody())
+                .responseStatus(call.getHttpStatus())
+                .responseBody(call.getResponseBody())
+                .successYn(call.getHttpStatus() != null && call.getHttpStatus() >= 200
+                        && call.getHttpStatus() < 300)
+                .durationMs(call.getDurationMs())
                 //PG가 제공한 오류 코드는 보존하고, 그 밖의 예외는 실제 예외 유형을 기록한다.
                 .errorType(exception == null || exception instanceof PaymentException
-                        ? limit(result.getCode(), 100) : exception.getClass().getSimpleName())
-                .errorMessage(limit(result.getMessage(), 1000))
-                .requestedAt(requestedAt)
-                .respondedAt(result.getHttpStatus() == null ? null : LocalDateTime.now())
+                        ? limit(errorCode, 100) : exception.getClass().getSimpleName())
+                .errorMessage(limit(errorMessage, 1000))
+                .requestedAt(call.getRequestedAt())
+                .respondedAt(call.getRespondedAt())
                 .build());
     }
 

@@ -1,0 +1,2 @@
+사용자: requestMethod 이거는 processor에 존재 이유가 없는데 http method는 return 받을 때 주면 되잖음
+AI: 맞아. 현재 `requestMethod()`는 PG 호출 결과를 API 로그에 저장할 때만 쓰여. 승인·조회 결과에 실제 HTTP 메서드를 담고, 로그가 그 값을 기록하도록 바꾸겠습니다. 기존에 작업 중인 Registry 변경은 유지할게.

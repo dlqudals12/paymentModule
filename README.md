@@ -91,7 +91,7 @@ PG 호출은 DB 트랜잭션 밖에서 실행하고, 호출 전후의 DB 변경�
 
 `PaymentProcessor`는 PG별 응답을 공통 `PaymentProcessResult`로 변환합니다. 승인·조회 시에는 JPA `Payment` 엔티티 대신 결제 행의 스칼라 값과 감사 필드를 복사한 `PaymentProcessorData`를 받습니다. JPA 연관 `User` 객체는 포함하지 않고 결제 행에 저장된 사용자 식별값만 전달합니다. API 호출이 정상적으로 끝나 결제 상태를 받은 경우에는 결과를 반환합니다. PG API 오류는 상태, PG HTTP 상태, 오류 코드·메시지를 담은 `PaymentException`을 던집니다. 그 밖의 예상하지 못한 호출 예외는 서비스에서 따로 잡아 최초 승인 결과를 `UNKNOWN`으로 기록하고, 결과 조회 중이었다면 기존 결제 상태를 유지합니다. 정상 API 응답 뒤 DB 저장 중 발생한 예외는 PG 호출 오류로 다시 기록하지 않습니다.
 
-`PaymentService`는 PG 호출과 결제 상태 분기를 같은 `try`에서 수행하고, `PaymentException`과 그 외 예외를 각각 처리합니다. DB 저장은 별도 트랜잭션의 `PaymentTransactionService.writeResult()`로 통일했습니다. 이 메서드는 결과 상태에 따라 `payment`와 `payment_history`를 갱신하고 PG 호출 결과를 `payment_api_log`에 기록합니다. 성공 결과에는 예외를 `null`로 전달하며, 예외 유무가 아닌 `PaymentProcessResult.status`로 결제 상태를 판단합니다. 조회 결과가 불확실하거나 404 재조회 중이면 결제 상태를 바꾸지 않고 API 로그만 남깁니다.
+`PaymentService`는 PG 호출과 결제 상태 분기를 같은 `try`에서 수행하고, `PaymentException`과 그 외 예외를 각각 처리합니다. DB 저장은 별도 트랜잭션의 `PaymentTransactionService.writeResult()`로 통일했습니다. 이 메서드는 결과 상태에 따라 `payment`와 `payment_history`를 갱신하고 PG 호출 결과를 `payment_api_log`에 기록합니다. 성공 결과에는 예외를 `null`로 전달하며, 예외 유무가 아닌 `PaymentProcessResult.status`로 결제 상태를 판단합니다. PG 구현은 호출별 HTTP 메서드·요청 URL·선별한 요청·응답 JSON·응답 상태·시각을 `PaymentProcessResult.apiCalls`에 실행 순서대로 담고, 각 항목을 API 로그 한 행으로 저장합니다. 토스 승인 요청 JSON에는 주문번호와 금액만, 성공 응답 JSON에는 주문번호·금액·상태·수단·승인 시각만, 오류 응답 JSON에는 오류 코드와 메시지만 포함합니다. 결제 키는 별도 식별 컬럼에 기록하고 카드·계좌·휴대전화 상세 정보나 인증 헤더는 본문 JSON에 담지 않습니다. PG 결과를 만들기 전 예상 밖 예외가 발생해 실제 값을 확인할 수 없으면 로그에는 `UNKNOWN`을 기록합니다. 조회 결과가 불확실하거나 404 재조회 중이면 결제 상태를 바꾸지 않고 API 로그만 남깁니다.
 
 PG API 오류는 `BusinessException`을 상속한 `PaymentException`으로 전달하고 `ResponseCode.PAYMENT_CONFLICT`의 HTTP 409 응답을 사용합니다. 오류 응답의 `code`에는 PG 오류 코드를, `message`에는 안내 문구를 담고, DB 기록에 사용하는 결과 객체 전체는 응답에 노출하지 않습니다. PG 오류 코드가 없으면 모듈의 기본 409 코드를 사용합니다.
 
@@ -330,5 +330,35 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 5. **결과:** 현재 구현과 앞으로의 라이브러리화 계획을 구분해 확인할 수 있습니다. 이번 항목은 설계 기록이며 라이브러리 빌드 구성은 변경하지 않았습니다.
 
 **당시 대화:** [Spring Boot 결제 라이브러리 방향](docs/conversations/payment-library-direction.txt)
+
+### 2026-11-25 · PG HTTP 메서드를 호출 결과에 기록
+
+1. **문제 사항:** Processor 계약의 `requestMethod()`는 승인 호출의 HTTP 메서드를 API 로그에 적기 위해서만 사용됐습니다.
+2. **원인:** 승인과 조회가 각각 다른 HTTP 메서드를 쓸 수 있는데, 호출 결과와 별도로 Processor에서 메서드를 다시 조회했습니다.
+3. **생각과 해결 방향:** PG 구현이 실제 호출 메서드를 공통 결과에 포함하고 로그 저장은 그 값을 사용합니다. PG 결과가 없는 예외에서는 메서드를 추정하지 않습니다.
+4. **해결안:** Processor의 `requestMethod()`를 제거하고 토스 승인·조회 호출 정보에 각각 `POST`·`GET`을 넣었습니다. 이후 호출별 정보를 아래 `PaymentProcessResult.apiCalls`로 묶었습니다. 메서드 미확인 로그는 `UNKNOWN`으로 기록합니다.
+5. **결과:** API 로그의 HTTP 메서드가 호출별 결과를 따릅니다. 예상 밖 예외의 메서드는 확인 불가로 구분합니다.
+
+**당시 대화:** [PG HTTP 메서드 기록](docs/conversations/payment-http-method-result.txt)
+
+### 2026-11-25 · PG 요청 URL을 호출 결과에 기록
+
+1. **문제 사항:** Processor 계약의 `paymentUrl()`과 `lookupUrl()`을 API 로그 저장을 위해 별도로 호출했습니다.
+2. **원인:** 실제 호출 URL이 PG 요청 결과와 떨어져 있어 조회 경로의 결제 키도 로그에 반영되지 않았습니다.
+3. **생각과 해결 방향:** 한 결제 처리에서 여러 PG API를 호출할 수 있으므로 호출 정보를 시간순 목록으로 보관하고, 로그 저장은 각 호출 항목을 참조합니다.
+4. **해결안:** `PaymentProcessResult.apiCalls`와 호출별 `PaymentApiCallResult`를 추가하고 토스 승인·조회 및 PG 오류 결과에 요청 URL·메서드·응답·시각을 채웠습니다. Processor의 URL 메서드를 제거하고, 결과 생성 전 예외의 로그에는 `UNKNOWN`을 기록합니다.
+5. **결과:** 토스 조회 로그에는 결제 키가 포함된 요청 URL이 남습니다. 여러 호출 항목은 순서대로 개별 로그 행이 되며, `writeResult()`는 Processor를 전달받지 않아도 됩니다.
+
+**당시 대화:** [PG 요청 URL 기록](docs/conversations/payment-request-url-result.txt)
+
+### 2026-11-25 · PG 호출별 요청·응답 JSON 기록
+
+1. **문제 사항:** `payment_api_log`에 요청·응답 본문 컬럼이 있지만 실제 결제 호출에서는 값을 저장하지 않았습니다.
+2. **원인:** `PaymentApiCallResult`가 호출별 메서드·URL·상태만 전달했고 요청·응답 DTO의 로그용 표현은 만들지 않았습니다.
+3. **생각과 해결 방향:** 여러 종류의 PG API를 호출할 수 있으므로 각 호출 항목에 요청·응답 JSON을 넣습니다. 저장할 필드는 DTO에서 선별해 민감한 원문이 로그에 들어가지 않게 합니다.
+4. **해결안:** 토스 승인 요청에서 주문번호·금액, 조회·승인 응답에서 주문번호·금액·상태·수단·승인 시각을 JSON으로 만들고 API 로그 본문 컬럼에 저장합니다. 오류 결과는 코드·메시지를 JSON으로 기록합니다.
+5. **결과:** 결제 흐름에서 호출한 토스 API의 요청·응답 내용을 로그에서 확인할 수 있습니다. `TossPaymentApi`를 Processor 밖에서 직접 호출한 경우는 현재 이 DB 로그 경로를 거치지 않습니다.
+
+**당시 대화:** [PG 요청·응답 JSON 기록](docs/conversations/payment-api-body-log.txt)
 
 결제 상태 복구와 완료 이벤트 재전달은 `PaymentScheduler`와 `schedule.payments` 설정 아래에 모았습니다. 처리량에 따른 배치 크기나 실행 분산은 실제 호출량을 본 뒤 결정하기로 했습니다.
