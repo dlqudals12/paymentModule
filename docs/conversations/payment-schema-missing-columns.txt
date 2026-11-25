@@ -1,0 +1,5 @@
+사용자: : JDBC exception executing SQL [Unknown column 'p1_0.externalPaymentId' in 'field list'] [select
+schema.sql에 다 추가해놔
+AI: `Payment` 엔티티의 필드와 `schema.sql`의 `payment` 테이블 정의를 비교해 누락된 컬럼을 반영하겠습니다. 기존 DB에도 적용이 필요한지는 스키마 설정을 함께 확인하겠습니다.
+사용자: 지금 schema.sql에 누락된거 다 반영된거지?
+AI: 네. 확인한 기존 DB에서 빠진 컬럼 4개는 모두 `schema.sql`에 조건부 추가 구문으로 반영했습니다. 복사한 구형 테이블에서 네 컬럼이 생성되는 것까지 확인했습니다. **실제 `payment` DB에는 아직 적용하지 않았고**, 기존 인덱스·고유 제약은 이번 컬럼 보완과 별개로 남아 있습니다.

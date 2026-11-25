@@ -1,0 +1,5 @@
+사용자: 1. A form field element should have an id or name attribute
+2. Response was blocked by CORB (Cross-Origin Read Blocking)
+사용자: 결제창 열기에서 오류남
+사용자: [결제 준비 화면과 개발자 도구 Network 캡처]
+AI: 원인을 찾았습니다. 현재 프런트 키는 `test_gck` 계열이고 백엔드 시크릿은 짝인 `test_gsk` 계열입니다. 지금 화면은 토스 SDK의 `payment()`를 호출하는데, 토스 SDK 문서는 이 방식에 API 개별 연동 키(`test_ck`·`test_sk`)를 안내합니다. 스크린샷에서 선택한 `log.tosspayments.com` 요청은 200이라 CORB 메시지만으로 결제 실패 원인이라고 볼 수 없습니다. 키 종류를 화면에서 명확히 알리도록 하고, 입력 필드 경고도 수정하겠습니다.

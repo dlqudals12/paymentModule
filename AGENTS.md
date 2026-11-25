@@ -128,6 +128,7 @@
 
 - 결제 모듈은 주문이나 상품 도메인에 종속되지 않는다. 결제 식별에는 `productId` 대신 `orderId`를 사용한다.
 - `Payment.id`는 내부 PK, `Payment.externalPaymentId`는 PG 결제 키다. 이력·API 로그의 `paymentId`는 내부 `Payment.id` 참조값으로 유지하고, 같은 행에 저장하는 PG 결제 키는 `externalPaymentId`, PG 거래 키는 `transactionId`로 구분한다. 이력·API 로그는 각자의 `id`만 PK로 사용하며 결제 참조값이나 PG 키에 고유 제약을 두지 않는다.
+- 브라우저에 전달하는 결제 API의 `Long` PK는 JavaScript 정밀도 손실을 막도록 JSON 문자열로 직렬화한다. 서버 내부 PK와 경로 변수는 `Long`으로 유지한다.
 - `Payment`는 주문당 현재 결제 상태 한 행으로 관리한다. `ready`는 `orderId`로 결제 대상의 확정 금액을 서버에서 확인해 저장한다. 같은 주문의 `READY` 재호출은 금액을 갱신하고, `FAILED`가 확정된 경우 같은 행을 새 `READY` 시도로 재준비한다. 이전 상태와 PG 호출 결과는 이력과 API 로그에 남긴다.
 - `ready` 요청에서 금액을 받지 않는다. 금액은 별도 계산 클래스에서 `orderId`로 산출하고, 주문 연동 전 임시 금액 사용 여부를 코드에 명시한다.
 - `payment`는 PG 승인 전에 현재 결제 대상 금액, 준비 단계에 저장한 금액, SDK 결과 금액을 대조한다. 같은 주문의 중복 승인은 DB 락과 결제 상태로 막는다.
@@ -138,6 +139,8 @@
 - 주문 반영 실패나 이벤트 누락 시 미완료 상태를 재전달하되, 재전달을 받는 주문 업무는 `paymentId` 기준으로 중복 처리를 막는다.
 - PG 승인과 결제 결과 저장은 동기 처리한다. 성공 커밋 후 도메인 중립적인 완료 이벤트를 발행하고, 후속 업무는 수신 측에서 비동기로 처리한다.
 - PG별 승인 구현은 `PaymentProcessor`로 분리하고 `PaymentProvider`를 키로 한 Bean 맵에서 선택한다.
+- React 결제 테스트 화면은 토스 주문서형 결제위젯 `widgets()`와 `gck/gsk` 키 쌍을 사용한다. 공개 `gck`는 Vite 설정에, 비밀 `gsk`는 백엔드 설정에 둔다.
+- PG API의 공통 콘솔 로그는 요청·응답을 각각 빈 줄로 시작하는 여러 줄로 표시한다. 토스가 노출을 금지한 인증값과 구매자 식별 키만 가리고, `paymentKey`와 결제수단 상세는 임의로 가리지 않는다.
 - 결제 기능의 장기 목표는 Spring Framework 의존성을 허용하는 Spring Boot 라이브러리다. PG사가 추가되어 공통 처리와 PG별 차이를 확인한 뒤 전체 결제 기능의 라이브러리 분리를 검토한다. 현재 단일 프로젝트를 이미 배포 가능한 라이브러리로 설명하지 않는다.
 - `PaymentProcessor`의 승인·조회 입력에는 JPA `Payment` 엔티티 대신 공통 `PaymentProcessorData`를 전달한다. 이 DTO에는 결제 행의 스칼라 값과 감사 필드를 모두 복사하고 JPA 연관 객체는 포함하지 않는다.
 - PG 호출별 HTTP 메서드와 요청 URL은 `PaymentProcessResult.apiCalls`에 실행 순서대로 담아 각각 API 로그로 기록한다. 결과가 만들어지지 않은 예외에서는 실제 값을 추정하지 않고 `UNKNOWN`으로 기록한다.

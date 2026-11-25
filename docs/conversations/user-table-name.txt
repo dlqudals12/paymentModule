@@ -1,0 +1,10 @@
+사용자: java.sql.SQLSyntaxErrorException: Table 'payment.User' doesn't exist
+이거 schema때문에 그러는듯
+사용자: 이게 payment로 url에 있는데
+사용자: 또 payment 들어가서 payment.payment 이렇게 들어가는거 아님?
+AI: 맞아요. JDBC URL의 `payment`는 **DB 이름**이라서 `payment.payment`는 `payment` DB의 `payment` 테이블을 뜻합니다.
+
+이번 오류의 `payment.User`도 같은 방식인데, 실제 DB에는 소문자 `user` 테이블만 있습니다. User.java는 `@Table`에 이름이 없고, 현재 명명 설정은 클래스명 `User`를 그대로 사용합니다. 따라서 schema.sql의 `user`와 이름이 어긋납니다. 로컬 MySQL도 테이블명 대소문자를 구분합니다.
+
+수정할 곳은 DB URL이 아니라 `User` 엔티티의 `@Table(name = "user")`입니다.
+사용자: 수정해바

@@ -43,7 +43,7 @@ Redis 의존성과 컨테이너 설정은 포함되어 있지만, 현재 결제 
 
 `PaymentScheduler`는 상태 변경 후 설정된 유예 시간이 지난 `PROCESSING`·`UNKNOWN`·`WAITING_FOR_PAYMENT` 결제를 저장된 결제 키로 PG에 조회합니다. 조회 결과가 입금 대기이면 `WAITING_FOR_PAYMENT`로 확정하고 다음 실행에서 다시 확인합니다. 주문 이벤트 재전달과 결제 상태 복구는 `schedule.payments` 아래 `order`, `processing` 설정으로 각각 조정합니다. 현재 두 작업은 시작 1분 후 첫 실행을 시작하고 각 실행이 끝난 5분 뒤 다시 실행합니다. 대상의 기준 시각에서 10분이 지난 건을 조회합니다.
 
-토스 API 호출에는 시크릿 키 기반 Basic 인증, JSON 본문, 멱등키를 사용합니다. 요청·응답 로그와 DB의 API 로그에는 인증 헤더와 결제 본문 원문을 저장하지 않습니다.
+토스 API 호출에는 시크릿 키 기반 Basic 인증, JSON 본문, 멱등키를 사용합니다. `RestClient` 공통 인터셉터는 요청·응답의 메서드, 경로, 상태, 시간, 헤더, JSON 본문을 여러 줄로 출력하며 인증값과 구매자 식별 키만 가립니다. `paymentKey`와 결제수단 정보는 콘솔 로그에서 가리지 않습니다. DB의 `payment_api_log`에는 PG 처리기가 선별한 요청·응답 JSON과 호출 결과만 저장하고 원문과 인증 헤더는 저장하지 않습니다.
 
 ## 설계 시 고려한 상황
 
@@ -131,21 +131,25 @@ src/main/java/com/paymentModule/
 
 `PaymentService`는 결제 흐름을 조율하고, `PaymentTransactionService`는 결제 생성과 `writeResult()`의 상태·이력·로그 저장을 짧은 트랜잭션으로 처리합니다. `PaymentProcessor` 구현은 `PaymentProvider`를 키로 한 Bean 맵에서 선택하며, 현재 등록된 구현은 `TossPaymentProcessor`입니다.
 
-주요 테이블은 주문별 현재 결제 상태 한 행을 보관하는 `payment`, 상태 변경을 기록하는 `payment_history`, 실제 PG 호출 결과를 기록하는 `payment_api_log`입니다. 새로 만드는 DB에는 `orderId` 고유 제약을 적용합니다. 기존 DB는 `CREATE TABLE IF NOT EXISTS`로 제약이 바뀌지 않으므로 중복 주문 행 확인과 스키마 반영이 별도로 필요합니다.
+주요 테이블은 주문별 현재 결제 상태 한 행을 보관하는 `payment`, 상태 변경을 기록하는 `payment_history`, 실제 PG 호출 결과를 기록하는 `payment_api_log`입니다. 새로 만드는 DB에는 `orderId` 고유 제약을 적용합니다. 기존 DB에서 빠진 `externalPaymentId`·`transactionId` 컬럼은 `schema.sql`이 조건부로 추가합니다. 기존 인덱스와 고유 제약은 `CREATE TABLE IF NOT EXISTS`로 바뀌지 않으므로 중복 주문 행 확인과 별도 반영이 필요합니다.
 
 `payment.id`는 내부 PK, `payment.orderId`는 주문 ID, `payment.externalPaymentId`는 PG 결제 키입니다. 이력·API 로그의 `paymentId`는 내부 결제 PK를 참조하며, PG 결제 키는 `externalPaymentId`, PG 거래 키는 `transactionId`에 저장합니다. 이력·API 로그는 각 행의 `id`만 PK로 사용하고 결제 참조값과 PG 키에는 고유 제약을 두지 않습니다.
+
+결제 API 응답의 `PaymentResponse.id`는 JavaScript의 안전한 정수 범위를 넘을 수 있어 JSON 문자열로 전달합니다. 서버 내부의 `Payment.id`와 경로 변수 `paymentId`는 `Long`으로 유지합니다. React 화면은 응답 ID를 숫자로 변환하지 않고 조회·재결제 URL에 사용합니다.
 
 ## 로컬 실행
 
 1. Java 25와 Docker 실행 환경을 준비합니다.
-2. 토스 API를 실제 호출할 경우 `TOSS_CLIENT_KEY`, `TOSS_SECRET_KEY`, `TOSS_SECURITY_KEY` 환경 변수를 설정합니다. 설정 위치는 `src/main/resources/application.yaml`입니다.
+2. 토스 API를 실제 호출할 경우 `src/main/resources/application.yaml`의 `payments.toss` 설정을 확인합니다. 공개 클라이언트 키는 문서용 위젯 테스트 키(`test_gck`)이며, 서버 시크릿 키는 `TOSS_SECRET_KEY` 환경변수로 전달합니다. 결제 테스트에는 같은 키 쌍의 `test_gsk`를 사용합니다.
 3. 프로젝트 루트에서 `./gradlew bootRun`을 실행합니다. Windows PowerShell에서는 `.\gradlew.bat bootRun`을 사용합니다.
 
-애플리케이션 포트는 `8080`입니다. `compose.yml`에 MySQL과 Redis가 정의되어 있고 Spring Boot Docker Compose 연동이 활성화되어 있습니다. MySQL은 로컬 `3306` 포트를 사용합니다. 최초 테이블 생성 SQL은 `src/main/resources/sql/schema.sql`에 있습니다. Hibernate 물리적 명명 전략은 스키마의 camelCase 컬럼명을 그대로 사용하도록 설정합니다. 기존 테이블에는 `CREATE TABLE IF NOT EXISTS`가 새 컬럼을 추가하지 않으므로 스키마 변경 시 별도 반영이 필요합니다.
+애플리케이션 포트는 `8080`입니다. `compose.yml`에 MySQL과 Redis가 정의되어 있고 Spring Boot Docker Compose 연동이 활성화되어 있습니다. MySQL은 로컬 `3306` 포트를 사용합니다. 테이블 생성과 결제 식별자 컬럼의 조건부 보완 SQL은 `src/main/resources/sql/schema.sql`에 있습니다. Hibernate 물리적 명명 전략은 스키마의 camelCase 컬럼명을 그대로 사용하도록 설정하며, `User` 엔티티는 실제 테이블 이름 `user`를 명시합니다. 기존 테이블의 다른 컬럼·인덱스·제약 변경은 별도 반영이 필요합니다.
 
-React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci`, `npm run dev`로 시작합니다. 화면은 Vite 개발 서버의 `/apis` 프록시를 통해 백엔드에 요청하므로 로그인 JWT 쿠키를 같은 출처로 전달합니다. 로그인·회원가입, `ready`, 토스 SDK 결제창, 성공 URL의 승인 요청, 실패 화면, 본인 결제 목록·단건 조회와 실패·결과 미확인 결제의 재시도 버튼을 제공합니다. 토스 클라이언트 키는 백엔드의 `TOSS_CLIENT_KEY` 설정에서 공개용 키만 조회하며 시크릿 키는 브라우저에 전달하지 않습니다. 이 화면은 SDK의 `payment()`를 사용하므로 실제 PG 테스트에는 API 개별 연동 테스트 클라이언트 키(`test_ck`)와 짝이 맞는 시크릿 키(`test_sk`)가 필요합니다.
+Hibernate SQL의 `?`에 전달되는 값은 `org.hibernate.orm.jdbc.bind=TRACE`로 SQL 다음에 별도 바인딩 로그로 표시합니다. SQL 문자열 자체의 `?`가 값으로 치환되지는 않습니다.
 
-현재는 DB를 새로 생성하는 단계이므로 결제 테이블 구조는 `src/main/resources/sql/schema.sql`을 기준으로 관리합니다.
+React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci`, `npm run dev`로 시작합니다. 화면은 Vite 개발 서버의 `/apis` 프록시를 통해 백엔드에 요청하므로 로그인 JWT 쿠키를 같은 출처로 전달합니다. 백엔드 `WebConfig`는 Vite의 `http://localhost:5173` 출처를 허용합니다. 로그인·회원가입, `ready`, 토스 결제위젯의 결제수단·약관 표시와 결제 요청, 성공 URL의 승인 요청, 실패 화면, 본인 결제 목록·단건 조회와 실패·결과 미확인 결제의 재시도 버튼을 제공합니다. 테스트 화면은 `frontend/.env.local`의 공개 `VITE_TOSS_CLIENT_KEY`를 직접 읽으며, 백엔드에는 짝이 맞는 `TOSS_SECRET_KEY`가 필요합니다. `frontend/.env.local`은 Git에 포함하지 않고 시크릿 키는 브라우저에 전달하지 않습니다. 이 화면은 SDK의 `widgets()`를 사용하며 주문서형 테스트 클라이언트 키(`test_gck`)와 짝이 맞는 시크릿 키(`test_gsk`)가 필요합니다.
+
+결제 테이블의 신규 생성 구조와 확인된 구형 결제 식별자 컬럼 보완은 `src/main/resources/sql/schema.sql`을 기준으로 관리합니다.
 
 ## 테스트
 
@@ -360,5 +364,95 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 5. **결과:** 결제 흐름에서 호출한 토스 API의 요청·응답 내용을 로그에서 확인할 수 있습니다. `TossPaymentApi`를 Processor 밖에서 직접 호출한 경우는 현재 이 DB 로그 경로를 거치지 않습니다.
 
 **당시 대화:** [PG 요청·응답 JSON 기록](docs/conversations/payment-api-body-log.txt)
+
+### 2026-11-25 · 기존 결제 테이블의 누락 컬럼 보완
+
+1. **문제 사항:** 결제 테이블을 조회하는 SQL에서 `payment.externalPaymentId`가 없다는 JDBC 오류가 발생했습니다.
+2. **원인:** 현재 엔티티와 `schema.sql`의 `CREATE TABLE`에는 컬럼이 있지만 기존 로컬 MySQL 테이블에는 이전 이름의 컬럼만 남아 있었습니다. `CREATE TABLE IF NOT EXISTS`는 기존 테이블에 새 컬럼을 추가하지 않습니다.
+3. **생각과 해결 방향:** 실제 로컬 DB의 세 결제 테이블 컬럼을 확인하고, 누락된 결제 식별자 컬럼만 `schema.sql`에서 재실행 가능하게 보완합니다. 기존 데이터와 인덱스는 이번 컬럼 추가와 분리합니다.
+4. **해결안:** `payment.externalPaymentId`, `payment_history.externalPaymentId`·`transactionId`, `payment_api_log.externalPaymentId`가 없을 때만 추가하도록 조건부 SQL을 넣었습니다.
+5. **결과:** 복사한 구형 테이블에 SQL을 두 차례 실행해 네 컬럼이 각각 한 번씩 생성되는 것을 확인했습니다. 실제 `payment` DB에는 아직 적용하지 않았고, 기존 인덱스·고유 제약은 그대로입니다.
+
+**당시 대화:** [기존 결제 테이블 컬럼 오류](docs/conversations/payment-schema-missing-columns.txt)
+
+### 2026-11-25 · Vite 회원가입 요청의 CORS 오류
+
+1. **문제 사항:** Vite의 `/apis/v3/auth/register` 요청이 HTTP 403과 `Invalid CORS request`로 거부됐습니다.
+2. **원인:** Vite 프록시가 전달한 `http://localhost:5173` 출처가 백엔드 `WebConfig`의 허용 목록에 없었습니다. 기존 허용값은 `http://localhost:3000`뿐이었습니다.
+3. **생각과 해결 방향:** Vite 테스트 화면의 출처를 백엔드 허용 목록에 추가합니다. 개발 프록시가 `Origin` 헤더를 제거하도록 잠시 넣은 변경은 원복합니다.
+4. **해결안:** `WebConfig`에 `http://localhost:5173`을 추가했습니다.
+5. **결과:** 허용 출처 설정은 수정됐습니다. 백엔드가 실행 중이지 않아 HTTP 요청으로 결과를 확인하지는 못했습니다.
+
+**당시 대화:** [Vite 회원가입 CORS 오류](docs/conversations/vite-register-cors.txt)
+
+### 2026-11-25 · 사용자 테이블 매핑 오류
+
+1. **문제 사항:** 사용자 조회 시 `Table 'payment.User' doesn't exist` 오류가 발생했습니다.
+2. **원인:** JDBC URL의 `payment`는 DB 이름입니다. 기존 `User` 엔티티의 `@Table`에는 이름이 없고 물리적 명명 전략은 대문자를 유지하지만, `schema.sql`과 실제 로컬 DB의 테이블 이름은 소문자 `user`입니다.
+3. **생각과 해결 방향:** DB 이름이나 테이블을 새로 만들지 않고 엔티티 매핑을 실제 테이블 이름에 맞춥니다.
+4. **해결안:** `User` 엔티티에 `@Table(name = "user")`를 명시했습니다.
+5. **결과:** 엔티티가 `payment.user` 테이블을 가리키도록 변경했습니다. 백엔드 HTTP 실행 결과는 아직 확인하지 않았습니다.
+
+**당시 대화:** [사용자 테이블 매핑 오류](docs/conversations/user-table-name.txt)
+
+### 2026-11-25 · 결제창 버튼 비활성화와 프런트 키 설정
+
+1. **문제 사항:** `ready`가 성공한 뒤에도 결제창 버튼이 비활성화되어 대기 상태처럼 보였습니다.
+2. **원인:** 버튼 활성 조건은 `clientKey`였고, 기존 화면은 초기 렌더링 때 백엔드 키 조회 API를 한 번 호출했습니다. 키 조회 실패·빈 값 안내는 이후 `ready` 성공 메시지에 덮일 수 있었습니다.
+3. **생각과 해결 방향:** 브라우저에서 쓰는 공개 클라이언트 키는 Vite의 환경 설정으로 직접 전달하고, 키가 없을 때는 준비 성공 메시지와 별도로 안내합니다. 백엔드의 시크릿 키는 프런트에 넣지 않습니다.
+4. **해결안:** `frontend/.env.local`과 설정 예시 파일 `.env.example`에 `VITE_TOSS_CLIENT_KEY` 항목을 마련하고, 결제 화면이 이를 읽도록 했습니다. 사용하지 않는 프런트 키 조회 함수를 제거했습니다.
+5. **결과:** 공개 키를 직접 입력하고 Vite를 재시작하면 결제창 버튼이 활성화됩니다. 백엔드의 키 조회 API는 다른 사용처를 위해 유지합니다.
+
+**당시 대화:** [프런트 결제 키 설정](docs/conversations/frontend-toss-client-key.txt)
+
+### 2026-11-25 · 결제창 호출의 키 종류 오류
+
+1. **문제 사항:** `결제창 열기`에서 오류가 발생했고, 개발자 도구에는 입력 필드 식별자 경고와 CORB 메시지가 보였습니다.
+2. **원인:** 주문번호 입력 필드에 `id`·`name`이 없었습니다. 결제창은 SDK `payment()`를 사용하는데 현재 로컬 프런트·백엔드 설정의 키 종류는 결제위젯용 `test_gck`·`test_gsk`였습니다. 캡처된 토스 로그 요청은 HTTP 200이라 그 CORB 메시지만으로 결제 실패 원인을 확정하지 않았습니다.
+3. **생각과 해결 방향:** 현재 `payment()` 흐름에는 API 개별 연동 키 `test_ck`·`test_sk`를 사용합니다. 키 값 자체는 사용자 로컬 설정에서 바꾸고, 화면은 잘못된 `gck` 키를 전달하기 전에 이유를 알립니다.
+4. **해결안:** 주문번호 입력에 `id`·`name`을 추가하고, `gck` 키가 설정됐을 때 결제창 버튼을 비활성화하며 키 종류 안내를 표시했습니다.
+5. **결과:** 입력 필드 경고의 원인을 제거하고, 결제위젯용 키가 `payment()`에 들어가지 않도록 했습니다. 실제 결제창 성공은 맞는 키를 입력한 뒤 확인해야 합니다.
+
+**당시 대화:** [결제창 키 종류와 브라우저 경고](docs/conversations/toss-payment-key-type.txt)
+
+### 2026-11-25 · 문서용 gck/gsk 키로 결제위젯 연동
+
+1. **문제 사항:** `ready` 응답은 200이지만 결제 버튼이 비활성화되어 결제 테스트를 진행할 수 없었습니다.
+2. **원인:** 화면은 위젯용 `gck` 키를 차단하면서 `payment()` 방식으로 결제 요청을 구성했습니다. 문서용 키는 위젯 연동용입니다.
+3. **생각과 해결 방향:** 제공된 `gck/gsk` 키 쌍을 그대로 사용하도록 화면을 주문서형 위젯 흐름으로 전환합니다. 서버가 준비한 금액을 위젯에 설정하고 성공 URL에서 기존 서버 승인 API를 호출합니다.
+4. **해결안:** `widgets()`로 결제수단과 약관을 표시한 뒤 `requestPayment()`를 호출하도록 변경하고, 키 안내와 설정 문서를 갱신했습니다.
+5. **결과:** `gck` 키를 이유로 버튼을 차단하던 조건을 제거했습니다. 실제 브라우저 결제와 서버 승인 결과는 실행 환경에서 확인해야 합니다.
+
+**당시 대화:** [문서용 키와 위젯 연동 결정](docs/conversations/toss-widget-key-decision.txt)
+
+### 2026-11-25 · 서버 승인 키와 토스 API 로그 표시
+
+1. **문제 사항:** 위젯 전환 뒤 서버 승인에서 시크릿 키 오류가 발생했고, 콘솔의 `Toss API request` 로그가 잘 보이지 않았습니다.
+2. **원인:** 프런트는 위젯용 `gck`를 사용했지만 `payments.toss`에는 API 개별 연동용 `ck/sk`가 설정돼 있었습니다. 공통 인터셉터의 로그는 메서드·경로·상태·시간만 한 줄에 표시했습니다.
+3. **생각과 해결 방향:** 프런트와 서버를 같은 위젯 테스트 키 쌍으로 맞추고, `RestClient` 공통 인터셉터에서 요청·응답을 빈 줄로 시작하는 여러 줄 로그로 표시합니다. 토스가 노출을 금지한 인증값은 가립니다.
+4. **해결안:** 공개 클라이언트 키를 문서용 위젯 키로 변경하고, 서버 시크릿 키는 동일 키 쌍의 `gsk`를 환경변수로 주입하도록 했습니다. 요청·응답 헤더와 JSON 본문을 출력하고, 응답 본문을 로그 후에도 파싱할 수 있도록 버퍼링했습니다.
+5. **결과:** 서버에 위젯용 시크릿 키를 설정해 승인 테스트를 진행할 수 있게 했고 로그의 내용을 구분해 볼 수 있게 했습니다. Java 컴파일은 통과했습니다. 결제 처리기 단위 테스트는 실행 환경의 Byte Buddy 에이전트 JAR 경로 오류로 완료되지 않았습니다. 이후 사용자가 실제 서버 테스트를 모두 완료했다고 확인했습니다. `orderId` 조회 API는 위젯용 `gsk`를 지원하지 않지만 현재 결제·복구 경로는 결제 키로 조회합니다.
+
+**당시 대화:** [서버 키와 API 로그 표시](docs/conversations/toss-server-key-api-logs.txt)
+
+### 2026-11-25 · Hibernate 바인딩 값과 결제 키 로그
+
+1. **문제 사항:** SQL 로그의 `id = ?`에 전달된 값을 볼 수 없고 토스 API 콘솔 로그의 `paymentKey`도 가려졌습니다.
+2. **원인:** Hibernate SQL 출력에는 바인딩 값 로그가 설정되지 않았습니다. 토스 API 로그의 필드 필터는 `paymentKey`와 결제수단 상세까지 가리도록 작성됐습니다.
+3. **생각과 해결 방향:** Hibernate 바인딩 값을 별도 TRACE 로그로 보이게 합니다. 토스가 외부 노출을 허용한 `paymentKey`는 콘솔에 표시하고 인증에 쓰는 값만 가립니다.
+4. **해결안:** `org.hibernate.orm.jdbc.bind`를 `TRACE`로 설정하고, 토스 API 로그의 필드 필터에서 결제 키와 결제수단 필드를 제외했습니다.
+5. **결과:** SQL의 `?` 값은 별도 바인딩 로그에 나타나고, 토스 API 요청·응답의 `paymentKey`가 콘솔에 표시됩니다. 애플리케이션 재시작 후 실제 로그 확인이 필요합니다.
+
+**당시 대화:** [SQL 바인딩과 결제 키 로그](docs/conversations/sql-bind-and-payment-key-log.txt)
+
+### 2026-11-25 · 큰 결제 ID의 브라우저 정밀도 손실
+
+1. **문제 사항:** 결제 성공 응답에서 표시한 ID로 단건 조회하면 `결제를 찾을 수 없습니다` 404가 발생했습니다.
+2. **원인:** `PaymentResponse.id`가 JSON 숫자로 전달되었고, 실제 PK가 JavaScript의 안전한 정수 범위를 넘어 브라우저에서 반올림될 수 있었습니다. 조회 URL에는 반올림된 ID가 들어갈 수 있습니다.
+3. **생각과 해결 방향:** DB와 서버 내부 ID는 `Long`으로 유지하고, 브라우저로 나가는 결제 응답의 ID만 JSON 문자열로 직렬화합니다.
+4. **해결안:** `PaymentResponse.id`에 Jackson 3 문자열 직렬화를 지정했습니다. 큰 ID가 문자열로 유지되고 금액은 숫자로 남는 테스트를 추가했습니다.
+5. **결과:** 직렬화 회귀 테스트가 통과했습니다. 이후 사용자가 실제 서버에서 테스트를 모두 완료했다고 확인했습니다.
+
+**당시 대화:** [큰 결제 ID 조회 오류](docs/conversations/large-payment-id-lookup.txt)
 
 결제 상태 복구와 완료 이벤트 재전달은 `PaymentScheduler`와 `schedule.payments` 설정 아래에 모았습니다. 처리량에 따른 배치 크기나 실행 분산은 실제 호출량을 본 뒤 결정하기로 했습니다.

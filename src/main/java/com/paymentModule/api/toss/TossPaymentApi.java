@@ -1,5 +1,9 @@
 package com.paymentModule.api.toss;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.paymentModule.api.toss.dto.request.TossCancelRequest;
 import com.paymentModule.api.toss.dto.request.TossConfirmRequest;
 import com.paymentModule.api.toss.dto.request.TossVirtualAccountRequest;
@@ -9,9 +13,12 @@ import com.paymentModule.api.toss.dto.response.TossApiResult;
 import com.paymentModule.global.properties.payments.TossApiProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.BufferingClientHttpRequestFactory;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -19,6 +26,10 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -26,18 +37,22 @@ import java.util.function.Supplier;
 @Slf4j
 @Component
 public class TossPaymentApi {
+    private static final ObjectMapper LOG_OBJECT_MAPPER = new ObjectMapper();
+
     private final RestClient restClient;
     private final TossApiProperties tossApiProperties;
 
     /**
      * 토스 API의 기본 주소와 공통 인증 헤더를 설정한다.
-     * 요청과 응답 로그에는 인증 헤더나 결제 본문을 기록하지 않는다.
+     * 요청·응답은 여러 줄로 기록하되 인증에 사용되는 값만 가린다.
      */
     public TossPaymentApi(TossApiProperties properties) {
         this.tossApiProperties = properties;
 
         this.restClient = RestClient.builder()
                 .baseUrl(properties.getBaseUrl())
+                // 응답 본문을 로그에서 읽은 뒤에도 RestClient가 다시 읽을 수 있게 한다.
+                .requestFactory(new BufferingClientHttpRequestFactory(new SimpleClientHttpRequestFactory()))
                 // 토스 서버 API는 시크릿 키 뒤에 ':'를 붙인 Basic 인증을 사용한다.
                 .defaultHeaders(headers -> {
                     headers.setBasicAuth(properties.getSecretKey(), "");
@@ -52,24 +67,85 @@ public class TossPaymentApi {
 
                     long startedAt = System.nanoTime();
 
-                    // 인증 정보와 결제 본문은 로그에 남기지 않는다.
                     String path = request.getURI().getPath();
-                    log.info("Toss API request: method={}, path={}", request.getMethod(), path);
+                    log.info("\nToss API request\n  method={}\n  path={}\n  headers={}\n  body={}",
+                            request.getMethod(), path, logHeaders(request.getHeaders()), logBody(body));
                     try {
                         var response = execution.execute(request, body);
 
-                        log.info("Toss API response: method={}, path={}, status={}, elapsedMs={}",
+                        log.info("\nToss API response\n  method={}\n  path={}\n  status={}\n  elapsedMs={}\n  headers={}\n  body={}",
                                 request.getMethod(), path, response.getStatusCode(),
-                                (System.nanoTime() - startedAt) / 1_000_000);
+                                (System.nanoTime() - startedAt) / 1_000_000,
+                                logHeaders(response.getHeaders()), logBody(response.getBody().readAllBytes()));
 
                         return response;
                     } catch (IOException | RuntimeException e) {
-                        log.error("Toss API request failed: method={}, path={}, elapsedMs={}",
+                        log.error("\nToss API request failed\n  method={}\n  path={}\n  elapsedMs={}",
                                 request.getMethod(), path, (System.nanoTime() - startedAt) / 1_000_000, e);
                         throw e;
                     }
                 })
                 .build();
+    }
+
+    /**
+     * 헤더 구조는 유지하되 API 인증값과 세션 인증값은 출력하지 않는다.
+     */
+    private Map<String, Object> logHeaders(HttpHeaders headers) {
+        Map<String, Object> visible = new LinkedHashMap<>();
+        headers.forEach((name, values) -> visible.put(name,
+                sensitive(name) ? "[REDACTED]" : values));
+        return visible;
+    }
+
+    /**
+     * JSON 본문은 그대로 보여주고 인증에 사용되는 값만 가린다.
+     * JSON이 아닌 본문은 인증값 포함 여부를 판단할 수 없어 원문을 출력하지 않는다.
+     */
+    private String logBody(byte[] body) {
+        if (body.length == 0) {
+            return "[empty]";
+        }
+
+        try {
+            JsonNode json = LOG_OBJECT_MAPPER.readTree(new String(body, StandardCharsets.UTF_8));
+            if (json == null) {
+                return "[empty]";
+            }
+
+            redact(json);
+            return json.toPrettyString();
+        } catch (IOException e) {
+            return "[non-JSON body omitted]";
+        }
+    }
+
+    /**
+     * 중첩된 객체와 배열에서도 인증에 사용되는 값을 동일하게 가린다.
+     */
+    private void redact(JsonNode node) {
+        if (node instanceof ObjectNode object) {
+            object.properties().forEach(entry -> {
+                if (sensitive(entry.getKey())) {
+                    object.put(entry.getKey(), "[REDACTED]");
+                } else {
+                    redact(entry.getValue());
+                }
+            });
+        } else if (node instanceof ArrayNode array) {
+            array.forEach(this::redact);
+        }
+    }
+
+    /**
+     * 토스가 노출을 금지한 인증값과 구매자 식별 키만 로그에서 제외한다.
+     */
+    private boolean sensitive(String name) {
+        String field = name.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        return field.contains("authorization") || field.contains("cookie")
+                || field.contains("secret") || field.contains("token")
+                || field.contains("apikey") || field.contains("securitykey")
+                || field.contains("customerkey") || field.contains("billingkey");
     }
 
     /**

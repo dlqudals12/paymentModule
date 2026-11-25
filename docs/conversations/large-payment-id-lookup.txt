@@ -1,0 +1,10 @@
+사용자: Hibernate:
+   select ...
+   from payment p1_0
+   where p1_0.id=? and p1_0.userId=?
+사용자: binding parameter (1:BIGINT) <- [913336296613762700]
+사용자: binding parameter (2:BIGINT) <- [913327475744950241]
+사용자: Resolved [org.springframework.web.server.ResponseStatusException: 404 NOT_FOUND "결제를 찾을 수 없습니다."]
+사용자: 이거 원인 알았다 js에서 특정 크기 이상의 long을 못받아서 그럼 그거 잘 해줘
+AI: 로그의 결제 ID는 JavaScript의 안전한 정수 범위를 넘습니다. 응답과 화면에서 결제 ID를 문자열로 다루는 범위를 확인해 수정하겠습니다.
+사용자: 실제 서버에서 테스트 다 완료했음

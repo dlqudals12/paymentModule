@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS payment (
     CONSTRAINT ck_payment_cancelledAmount CHECK (cancelledAmount >= 0 AND cancelledAmount <= amount)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='결제 현재 상태 및 결제 결과 관리';
 
+-- 기존 payment 테이블에는 CREATE TABLE IF NOT EXISTS가 새 컬럼을 추가하지 않으므로 누락된 PG 결제 키 컬럼을 보완한다.
+SET @payment_external_id_sql = IF(
+    (SELECT COUNT(*) FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'externalPaymentId') = 0,
+    'ALTER TABLE payment ADD COLUMN externalPaymentId VARCHAR(255) NULL',
+    'SELECT 1'
+);
+PREPARE payment_external_id_stmt FROM @payment_external_id_sql;
+EXECUTE payment_external_id_stmt;
+DEALLOCATE PREPARE payment_external_id_stmt;
+
 CREATE TABLE IF NOT EXISTS payment_history (
                                               id BIGINT NOT NULL COMMENT '결제 이력 PK',
                                               paymentId BIGINT NOT NULL COMMENT '결제 행 PK 참조값이며 DB 외래키 제약은 사용하지 않음',
@@ -75,6 +86,27 @@ CREATE TABLE IF NOT EXISTS payment_history (
     CONSTRAINT ck_paymentHistory_transactionAmount CHECK (transactionAmount IS NULL OR transactionAmount >= 0),
     CONSTRAINT ck_paymentHistory_cumulativeCancelledAmount CHECK (cumulativeCancelledAmount IS NULL OR cumulativeCancelledAmount >= 0)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='결제 승인, 실패, 취소 및 상태 변경 이력';
+
+-- 이전 이력 테이블의 providerTransactionId와 현재의 PG 결제 키·거래 키는 별개 컬럼으로 둔다.
+SET @history_external_id_sql = IF(
+    (SELECT COUNT(*) FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'payment_history' AND column_name = 'externalPaymentId') = 0,
+    'ALTER TABLE payment_history ADD COLUMN externalPaymentId VARCHAR(255) NULL',
+    'SELECT 1'
+);
+PREPARE history_external_id_stmt FROM @history_external_id_sql;
+EXECUTE history_external_id_stmt;
+DEALLOCATE PREPARE history_external_id_stmt;
+
+SET @history_transaction_id_sql = IF(
+    (SELECT COUNT(*) FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'payment_history' AND column_name = 'transactionId') = 0,
+    'ALTER TABLE payment_history ADD COLUMN transactionId VARCHAR(255) NULL',
+    'SELECT 1'
+);
+PREPARE history_transaction_id_stmt FROM @history_transaction_id_sql;
+EXECUTE history_transaction_id_stmt;
+DEALLOCATE PREPARE history_transaction_id_stmt;
 
 CREATE TABLE IF NOT EXISTS payment_api_log (
                                              id BIGINT NOT NULL COMMENT 'PG사 API 통신 로그 PK',
@@ -109,3 +141,14 @@ CREATE TABLE IF NOT EXISTS payment_api_log (
     KEY idx_paymentApiLog_successYn (successYn),
     CONSTRAINT ck_paymentApiLog_durationMs CHECK (durationMs IS NULL OR durationMs >= 0)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='외부 PG사 API 요청, 응답 및 오류 통신 로그';
+
+-- 기존 통신 로그 테이블에도 PG 결제 키 컬럼을 추가한다. 재실행 시 이미 있으면 건너뛴다.
+SET @api_log_external_id_sql = IF(
+    (SELECT COUNT(*) FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'payment_api_log' AND column_name = 'externalPaymentId') = 0,
+    'ALTER TABLE payment_api_log ADD COLUMN externalPaymentId VARCHAR(255) NULL',
+    'SELECT 1'
+);
+PREPARE api_log_external_id_stmt FROM @api_log_external_id_sql;
+EXECUTE api_log_external_id_stmt;
+DEALLOCATE PREPARE api_log_external_id_stmt;

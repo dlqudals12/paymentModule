@@ -45,11 +45,6 @@ export async function approvePayment({ paymentKey, orderId, amount }) {
   return response.data.data
 }
 
-export async function loadClientKey() {
-  const response = await api.get('/payments/toss/client-key')
-  return response.data.data
-}
-
 export async function loadPayments(page = 0) {
   const response = await api.get('/payments', { params: { page } })
   return response.data.data

@@ -30,6 +30,10 @@ spring:
       enabled: true
       lifecycle-management: start-and-stop
 
+logging:
+  level:
+    org.hibernate.orm.jdbc.bind: TRACE
+
 server:
   port: 8080
 
@@ -44,7 +48,10 @@ payments:
     not-found-retry-delay-ms: 5000
     not-found-retry-count: 2
   toss:
-    client-key: ${TOSS_CLIENT_KEY:}
+    #    client-key: ${TOSS_CLIENT_KEY:}
+    #    secret-key: ${TOSS_SECRET_KEY:}
+    #    security-key: ${TOSS_SECURITY_KEY:}
+    client-key: test_gck_docs_Ovk5rk1EwkEbP0W43n07xlzm
     secret-key: ${TOSS_SECRET_KEY:}
     security-key: ${TOSS_SECURITY_KEY:}
     base-url: https://api.tosspayments.com

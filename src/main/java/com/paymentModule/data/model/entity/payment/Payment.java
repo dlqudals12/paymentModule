@@ -1,12 +1,7 @@
 package com.paymentModule.data.model.entity.payment;
 
-import com.paymentModule.data.enums.PaymentMethod;
-import com.paymentModule.data.enums.OrderStatus;
-import com.paymentModule.data.enums.PaymentProvider;
-import com.paymentModule.data.enums.PaymentStatus;
-import com.paymentModule.data.enums.PaymentType;
+import com.paymentModule.data.enums.*;
 import com.paymentModule.data.model.entity.BaseEntity;
-import com.paymentModule.data.model.entity.user.User;
 import io.hypersistence.utils.hibernate.id.Tsid;
 import jakarta.persistence.*;
 import lombok.*;
@@ -33,11 +28,6 @@ public class Payment extends BaseEntity {
 
     @Column(name = "userId", nullable = false, comment = "결제 대상 사용자 PK")
     private Long userId;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "userId", insertable = false, updatable = false,
-            foreignKey = @ForeignKey(ConstraintMode.NO_CONSTRAINT))
-    private User user;
 
     @Column(name = "loginId", nullable = false, length = 255, comment = "결제 당시 사용자의 로그인 식별자")
     private String loginId;

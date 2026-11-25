@@ -6,6 +6,8 @@ import com.paymentModule.data.enums.OrderStatus;
 import com.paymentModule.data.model.entity.payment.Payment;
 import lombok.Builder;
 import lombok.Getter;
+import tools.jackson.databind.annotation.JsonSerialize;
+import tools.jackson.databind.ser.std.ToStringSerializer;
 
 /**
  * 클라이언트가 SDK 요청과 결제 결과 확인에 사용하는 정보다.
@@ -13,6 +15,8 @@ import lombok.Getter;
 @Getter
 @Builder
 public class PaymentResponse {
+    // JavaScript의 안전한 정수 범위를 넘는 PK는 JSON 문자열로 보내 정확한 URL 값을 유지한다.
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
     private String externalPaymentId;
     private PaymentProvider provider;

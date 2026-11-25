@@ -1,0 +1,12 @@
+사용자: http://localhost:5173/apis/v3/auth/register
+Request method
+POST
+Status code
+403 Forbidden
+Remote address
+[::1]:5173
+사용자: Invalid CORS request
+AI: `Invalid CORS request`라면 회원가입 로직에 들어가기 전 CORS 검사에서 거부된 것입니다. 현재 프런트 요청 경로와 백엔드 CORS 설정을 확인하겠습니다. 앞서 요청한 스키마 보완은 파일에 반영했고, 복사한 기존 테이블에서 누락 컬럼이 추가되는 것까지 확인했습니다.
+AI: 현재 요청은 Vite의 `/apis` 프록시를 거치므로, 백엔드 공통 CORS 설정을 바꾸지 않고 개발 프록시에서 `localhost:5173`의 `Origin` 헤더를 전달하지 않도록 처리하겠습니다. 브라우저에서 Vite까지는 같은 출처 요청입니다.
+사용자: 네, WebConfig 수정
+AI: 답변 확인했습니다. 요청하신 대로 `WebConfig`에 `localhost:5173`을 허용하겠습니다. 방금 넣은 Vite 프록시의 헤더 제거 코드는 원복하고, 백엔드 설정으로 해결하겠습니다.

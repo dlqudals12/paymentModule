@@ -8,7 +8,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebConfig implements WebMvcConfigurer {
 
     private final String[] ALLOW_ORIGINS = {
-            "http://localhost:3000"
+            "http://localhost:3000",
+            "http://localhost:5173"
     };
 
     @Override
