@@ -52,8 +52,8 @@ payments:
     #    secret-key: ${TOSS_SECRET_KEY:}
     #    security-key: ${TOSS_SECURITY_KEY:}
     client-key: test_gck_docs_Ovk5rk1EwkEbP0W43n07xlzm
-    secret-key: ${TOSS_SECRET_KEY:}
-    security-key: ${TOSS_SECURITY_KEY:}
+    secret-key: test_gsk_docs_OaPz8L5KdmQXkzRz3y47BMw6
+    security-key: efc77e4c48ef26cdacc5d0913433561a2a9f86df4c259f2b4cb58ce1be91a641
     base-url: https://api.tosspayments.com
     path:
       confirm: /v1/payments/confirm

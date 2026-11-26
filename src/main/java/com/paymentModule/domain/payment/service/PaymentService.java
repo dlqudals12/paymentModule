@@ -294,7 +294,10 @@ public class PaymentService {
                 //이번 404는 기록하되 실패로 확정하지 않고, 정해진 간격 뒤 같은 결제 키를 재조회한다.
                 paymentTransactionService.writeResult(payment, result,
                         PaymentApiType.PAYMENT_LOOKUP, requestedAt, elapsedMillis(startedAt), pe, false);
+
+                //결제 재시도 전 대기
                 waitBeforeNotFoundRetry();
+
                 return recover(payment, processor, externalPaymentId, remainingRetries - 1);
             }
 

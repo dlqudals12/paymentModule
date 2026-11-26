@@ -1,4 +1,4 @@
-package com.paymentModule.global.schedule;
+package com.paymentModule.schedule;
 
 import com.paymentModule.data.enums.OrderStatus;
 import com.paymentModule.data.enums.PaymentStatus;

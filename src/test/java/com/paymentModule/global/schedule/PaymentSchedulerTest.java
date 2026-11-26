@@ -8,6 +8,7 @@ import com.paymentModule.data.repository.payment.PaymentRepository;
 import com.paymentModule.domain.payment.service.PaymentService;
 import com.paymentModule.event.payments.PaymentCompletedEvent;
 import com.paymentModule.global.properties.schedule.PaymentSchedulerProperties;
+import com.paymentModule.schedule.PaymentScheduler;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -17,10 +18,7 @@ import java.util.stream.IntStream;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 class PaymentSchedulerTest {
 
