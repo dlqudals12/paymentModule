@@ -62,6 +62,8 @@ payments:
       cancel: /v1/payments/{paymentKey}/cancel
       virtual-accounts: /v1/virtual-accounts
   nice:
+    #    client-key: ${NICE_CLIENT_KEY:}
+    #    secret-key: ${NICE_SECRET_KEY:}
     client-key: S2_06b9c03a332946f587e9b762b174f2e6
     secret-key: 7edbb7492ef6402c964229828cac0720
     base-url: https://sandbox-api.nicepay.co.kr
