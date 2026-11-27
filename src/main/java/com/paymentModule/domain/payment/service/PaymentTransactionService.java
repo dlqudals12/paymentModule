@@ -219,7 +219,7 @@ public class PaymentTransactionService {
                 && result.getStatus() == PaymentStatus.SUCCESS
                 && Objects.equals(current.getExternalPaymentId(), result.getExternalPaymentId())) {
             //다른 요청이 같은 결제 키의 성공을 먼저 확정했다면 이력은 중복 생성하지 않는다.
-            current.updateDetails(result.getMerchantId(), result.getReceiptUrl(), paymentMethodDetails(result));
+            current.updateDetails(result.getReceiptUrl(), paymentMethodDetails(result));
             saveApiLog(current, result, apiType, requestedAt, durationMs, exception);
             return PaymentResponse.of(current);
         }
@@ -268,7 +268,7 @@ public class PaymentTransactionService {
         //상태가 같은 입금 대기 재조회에서도 새로 확인한 계좌 안내 정보를 저장한다.
         if (result.getStatus() == PaymentStatus.SUCCESS
                 || result.getStatus() == PaymentStatus.WAITING_FOR_PAYMENT) {
-            current.updateDetails(result.getMerchantId(), result.getReceiptUrl(), paymentMethodDetails(result));
+            current.updateDetails(result.getReceiptUrl(), paymentMethodDetails(result));
         }
 
         //조회 결과가 불확실한 경우에도 실제 PG 통신 기록은 남긴다.

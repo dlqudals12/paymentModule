@@ -1,0 +1,10 @@
+사용자: 그러면  merchantId를 저장을 해야하나?
+AI: NICEPAY 연동 때문에 `merchantId`를 새로 저장할 필요는 없어. 현재 프로젝트에는 이미 nullable `Payment.merchantId`가 있고, 토스는 응답의 `mId`를 여기에 저장하고 있어.
+
+사용자: merchantId 컬럼을 삭제해야하나 고민인거지
+AI: 아, 컬럼 자체를 유지할지 고민한 거구나. 현재 구현 기준으로는 삭제하는 쪽을 추천해.
+
+사용자: 이전에 필요하다고 생각한거는 api호출에 필요하긴 했는데 그 api는 어떤 상점인지 특정하지 못했고 이번꺼는 내 상정인거 특정하고 보내는 거잖음
+AI: 맞아. 네가 처음 본 NICEPAY API는 요청에 MID를 따로 전달해야 해서 저장할 필요를 생각했던 거고, 지금 선택한 Server 승인·Basic 인증 방식은 결제창의 `clientId`와 서버의 `clientKey:secretKey`로 상점을 특정해. 승인 요청에는 `tid`와 금액을 보내고.
+
+사용자: 그거 일다 삭제하고 front에 npm으로 sdk 설치할 수 있는지 봐저ㅓ

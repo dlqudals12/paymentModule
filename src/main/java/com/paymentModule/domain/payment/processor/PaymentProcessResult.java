@@ -20,8 +20,6 @@ public class PaymentProcessResult {
     private PaymentStatus status;
     private String externalPaymentId;
     private String transactionId;
-    /** PG 가맹점 식별자다. 토스 mId, 나이스 MID에 해당한다. */
-    private String merchantId;
     private PaymentMethodType paymentMethod;
     /** PG 응답의 원본 상태와 결제수단 값이다. 공통 enum으로 변환되지 않은 값도 확인할 수 있다. */
     private String providerStatus;

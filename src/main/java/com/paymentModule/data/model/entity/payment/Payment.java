@@ -41,9 +41,6 @@ public class Payment extends BaseEntity {
     @Column(name = "externalPaymentId", length = 255, comment = "PG사에서 발급한 결제 식별자. 토스의 paymentKey")
     private String externalPaymentId;
 
-    @Column(name = "merchantId", length = 100, comment = "PG 가맹점 식별자. 토스 mId, 나이스 MID")
-    private String merchantId;
-
     @Column(name = "receiptUrl", length = 1000, comment = "PG 결제 영수증 주소")
     private String receiptUrl;
 
@@ -124,7 +121,6 @@ public class Payment extends BaseEntity {
         this.activeOrderId = orderId;
         this.amount = amount;
         this.externalPaymentId = null;
-        this.merchantId = null;
         this.receiptUrl = null;
         this.paymentMethodDetails = null;
         this.idempotencyKey = UUID.randomUUID().toString();
@@ -172,13 +168,10 @@ public class Payment extends BaseEntity {
     }
 
     /**
-     * PG가 반환한 현재 시도의 가맹점·영수증·결제수단 정보를 저장한다.
+     * PG가 반환한 현재 시도의 영수증·결제수단 정보를 저장한다.
      */
-    public void updateDetails(String merchantId, String receiptUrl, PaymentMethod paymentMethodDetails) {
+    public void updateDetails(String receiptUrl, PaymentMethod paymentMethodDetails) {
         //조회 응답이 일부 상세 필드를 생략해도 이미 저장된 입금 안내 정보를 지우지 않는다.
-        if (merchantId != null) {
-            this.merchantId = merchantId;
-        }
         if (receiptUrl != null) {
             this.receiptUrl = receiptUrl;
         }

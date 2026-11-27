@@ -70,7 +70,6 @@ class TossPaymentProcessorTest {
         TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
         TossApiResponse approved = response("order_card_001", "payment_card_001", 1500L,
                 TossPaymentStatus.DONE);
-        approved.setMId("merchant_test_001");
         approved.setRequestedAt("2026-11-27T09:30:00+09:00");
 
         TossApiResponse.Card card = new TossApiResponse.Card();
@@ -90,7 +89,6 @@ class TossPaymentProcessorTest {
                 paymentData("order_card_001", 1500L),
                 request("order_card_001", "payment_card_001", 1500L));
 
-        assertEquals("merchant_test_001", result.getMerchantId());
         assertEquals("DONE", result.getProviderStatus());
         assertEquals("https://example.com/receipt", result.getReceiptUrl());
         assertEquals("11", result.getCard().getIssuerCode());
@@ -132,11 +130,10 @@ class TossPaymentProcessorTest {
      * 간편결제에서도 PG 가맹점 ID와 간편결제 제공사를 각각 유지한다.
      */
     @Test
-    void easyPayKeepsMerchantAndProvider() {
+    void easyPayKeepsProvider() {
         TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
         TossApiResponse approved = response("order_easy_001", "payment_easy_001", 1500L,
                 TossPaymentStatus.DONE);
-        approved.setMId("merchant_easy_001");
         approved.setMethod(TossPaymentMethod.EASY_PAY);
 
         TossApiResponse.EasyPay easyPay = new TossApiResponse.EasyPay();
@@ -151,7 +148,6 @@ class TossPaymentProcessorTest {
                 request("order_easy_001", "payment_easy_001", 1500L));
 
         assertEquals(PaymentMethodType.EASY_PAY, result.getPaymentMethod());
-        assertEquals("merchant_easy_001", result.getMerchantId());
         assertEquals("TOSSPAY", result.getEasyPay().getProvider());
     }
 

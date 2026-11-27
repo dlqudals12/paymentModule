@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public enum PaymentProvider {
     TOSS("토스페이먼츠"),
+    NICE("나이스페이먼츠"),
     KCP("NHN KCP"),
     PORTONE("포트원");
 

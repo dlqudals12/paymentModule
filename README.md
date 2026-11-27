@@ -1,6 +1,6 @@
 # paymentModule
 
-회원 인증과 결제 준비·승인 흐름을 구현하는 Spring Boot 프로젝트입니다. 결제 모듈은 주문·상품 도메인의 후속 처리와 분리하고, PG별 승인 로직은 `PaymentProcessor`로 구분합니다. 현재 결제 흐름에 연결된 PG는 토스페이먼츠입니다.
+회원 인증과 결제 준비·승인 흐름을 구현하는 Spring Boot 프로젝트입니다. 결제 모듈은 주문·상품 도메인의 후속 처리와 분리하고, PG별 승인 로직은 `PaymentProcessor`로 구분합니다. 현재 결제 흐름에 연결된 PG는 토스페이먼츠와 나이스페이먼츠입니다.
 
 > **AI와의 개발 대화 기록:** [프로젝트 대화문](docs/ai-development-conversation.txt)
 > 설계와 구현을 논의한 사용자·AI 메시지를 시간순으로 담았습니다. 비속어는 표시 없이 삭제했고, 도구 실행 내역은 제외했습니다.
@@ -15,7 +15,7 @@
 | 데이터 저장소 | MySQL 8.4, Redis 7.4 |
 | PG 통신 | Spring `RestClient` |
 | API 문서 | springdoc OpenAPI |
-| API 테스트 화면 | React 19, Vite 8, React Router 8, Axios, TossPayments SDK 2 |
+| API 테스트 화면 | React 19, Vite 8, React Router 8, Axios, TossPayments SDK 2, NICEPAY 결제창 스크립트 |
 | 테스트 | JUnit 5, Spring Boot Test, H2, Mockito |
 
 Redis 의존성과 컨테이너 설정은 포함되어 있지만, 현재 결제 승인 흐름의 상태·이력·API 로그는 MySQL에 저장합니다.
@@ -31,10 +31,10 @@ Redis 의존성과 컨테이너 설정은 포함되어 있지만, 현재 결제 
 
 1. `POST /apis/v3/payments/ready`가 PG와 `orderId`를 받아 서버에서 금액을 계산하고 결제 시도를 `READY`로 저장합니다.
 2. 같은 주문에 `READY` 시도가 있으면 금액을 갱신합니다. `FAILED`가 확정되면 같은 `Payment` 행의 이전 PG 키·멱등키를 정리하고 새 `READY` 시도로 재준비합니다. 이전 상태와 PG 호출은 이력·API 로그에 남습니다. `PROCESSING`, `UNKNOWN`, `SUCCESS` 등은 다시 준비하지 않습니다.
-3. 클라이언트가 반환된 주문 정보로 PG SDK를 실행하고, 인증 결과의 `paymentKey`, `orderId`, `amount`를 결제 승인 API에 전달합니다.
+3. 클라이언트가 반환된 주문 정보로 PG SDK를 실행하고, 인증 결과의 PG 결제 키·`orderId`·`amount`를 결제 승인 API에 전달합니다. 토스는 `paymentKey`, 나이스페이는 `tid`를 PG 결제 키로 사용합니다. 나이스페이는 인증 결과의 서명도 서버에서 검증합니다.
 4. `POST /apis/v3/payments`는 서버에서 다시 계산한 금액, 저장 금액, 전달 금액을 비교합니다. 결제 행을 잠근 짧은 트랜잭션에서 `READY → PROCESSING`으로 변경해 같은 주문의 중복 승인 요청을 막습니다.
 5. DB 트랜잭션 밖에서 PG 승인 API를 호출합니다. 정상 API 응답의 결제 상태는 서비스에서 처리하고, PG API 오류는 `PaymentException`으로 전달합니다. 승인 결과를 확정할 수 없는 호출 오류는 `UNKNOWN`으로 기록합니다.
-6. 같은 결제 키로 `PROCESSING`, `UNKNOWN` 또는 `WAITING_FOR_PAYMENT` 요청이 다시 들어오면 PG 결제를 조회합니다. 조회 성공은 주문번호·금액·결제 키를 대조해 확정합니다. 토스가 결제 정보 부재를 명시한 404는 5초 간격으로 두 번 더 조회하고, 세 번 모두 결제 부재일 때 `FAILED`로 확정해 새 `ready` 시도를 허용합니다. 통신 오류 등 불확실한 조회 결과는 기존 상태를 유지합니다.
+6. 같은 결제 키로 `PROCESSING`, `UNKNOWN` 또는 `WAITING_FOR_PAYMENT` 요청이 다시 들어오면 PG 결제를 조회합니다. 조회 성공은 주문번호·금액·결제 키를 대조해 확정합니다. PG가 결제 정보 부재를 명시한 404는 5초 간격으로 두 번 더 조회하고, 세 번 모두 결제 부재일 때 `FAILED`로 확정해 새 `ready` 시도를 허용합니다. 통신 오류 등 불확실한 조회 결과는 기존 상태를 유지합니다.
 7. 성공 결과가 커밋되면 `PaymentCompletedEvent`를 발행합니다. 비동기 수신부는 `orderStatus`를 `BEFORE → PENDING`으로 변경합니다. 실제 주문 반영이 성공한 뒤 `COMPLETE`로 변경하는 연결은 TODO로 남아 있습니다.
 
 실패한 결제를 다시 시도할 때는 `POST /apis/v3/payments/{paymentId}/retry`로 내부 결제 ID를 전달합니다. `FAILED`는 같은 행에서 새 `READY` 시도로 준비하고, `UNKNOWN`은 저장된 PG 결제 키로 즉시 조회한 뒤 성공이면 기존 결과를 반환합니다. PG가 실패 또는 결제 부재를 확정한 경우에만 재준비하며, 결과가 여전히 불확실하면 새 시도를 막습니다. 재준비 응답을 받은 브라우저는 SDK를 다시 실행하고 새 결제 키로 기존 승인 API를 호출합니다. 같은 재결제 준비 요청이 `READY` 상태에 다시 들어오면 새 멱등키를 만들지 않고 준비 결과를 반환합니다.
@@ -57,9 +57,9 @@ PG별 요청·응답 처리는 `PaymentProcessor`로 분리하고 `PaymentProvid
 
 이 프로젝트의 목표는 사용하는 서비스가 결제 기능을 붙일 수 있는 Spring Boot 라이브러리입니다. Spring Framework에 의존하는 방식으로 개발하며, `RestClient`, 설정 프로퍼티, Bean 등록을 없애는 순수 Java 라이브러리를 목표로 하지 않습니다. 현재는 실행 가능한 단일 Spring Boot 프로젝트이고 별도 라이브러리 JAR이나 자동 설정을 배포하고 있지는 않습니다.
 
-현재는 토스페이먼츠만 연결되어 있으므로 PG별 처리기를 `PaymentProcessor`로 나누고 `PaymentProvider`로 선택합니다. 승인·조회에는 JPA `Payment` 엔티티 대신 공통 `PaymentProcessorData`를 넘겨 PG 구현이 저장 엔티티를 직접 다루지 않도록 했습니다. 이 단계는 향후 분리를 위한 입력 경계이며, 현재 Processor의 요청 DTO·상태 enum·예외·설정은 여전히 프로젝트 코드와 연결되어 있습니다.
+토스페이먼츠와 나이스페이먼츠의 처리기를 `PaymentProcessor`로 나누고 `PaymentProvider`로 선택합니다. 승인·조회에는 JPA `Payment` 엔티티 대신 공통 `PaymentProcessorData`를 넘겨 PG 구현이 저장 엔티티를 직접 다루지 않도록 했습니다. 이 단계는 향후 분리를 위한 입력 경계이며, 현재 Processor의 요청 DTO·상태 enum·예외·설정은 여전히 프로젝트 코드와 연결되어 있습니다.
 
-PG사가 추가되어 공통 처리와 PG별 차이를 실제 구현으로 확인한 뒤 결제 기능을 라이브러리로 분리할 계획입니다. 그때 공통 계약·상태·결과 타입과 각 PG의 API 클라이언트·처리기·설정을 라이브러리 경계에 맞춰 옮기고, Bean 등록과 `@ConfigurationProperties` 바인딩을 사용하는 애플리케이션에서 적용할 수 있게 구성합니다. 결제 금액 확인과 결제 후 주문 반영은 사용처의 업무에 연결해야 하므로, 사용처가 제공할 지점을 함께 정리합니다. 라이브러리 분리와 추가 PG 지원은 아직 구현되지 않았습니다.
+다른 PG사가 추가되어 공통 처리와 PG별 차이를 더 확인한 뒤 결제 기능을 라이브러리로 분리할 계획입니다. 그때 공통 계약·상태·결과 타입과 각 PG의 API 클라이언트·처리기·설정을 라이브러리 경계에 맞춰 옮기고, Bean 등록과 `@ConfigurationProperties` 바인딩을 사용하는 애플리케이션에서 적용할 수 있게 구성합니다. 결제 금액 확인과 결제 후 주문 반영은 사용처의 업무에 연결해야 하므로, 사용처가 제공할 지점을 함께 정리합니다. 라이브러리 분리는 아직 구현되지 않았습니다.
 
 ### 새로고침, 중복 탭, 중복 승인
 
@@ -99,6 +99,11 @@ PG API 오류는 `BusinessException`을 상속한 `PaymentException`으로 전�
 
 `TossPaymentApi`에는 결제 승인, `paymentKey` 조회, `orderId` 조회, 결제 취소, 가상계좌 발급 메서드가 있습니다. 현재 `ready → payment` 서비스 흐름에는 결제 승인과 결과 미확인 시 `paymentKey` 조회가 연결되어 있습니다. `orderId` 조회·취소·가상계좌 발급은 클라이언트 메서드가 있어도 해당 업무 API 흐름까지 구현된 것은 아닙니다.
 
+### 나이스페이 API 클라이언트
+
+`NicePaymentApi`는 동일한 `/v1/payments/{tid}` 경로에 승인 POST와 거래 조회 GET을 호출합니다. `NicePaymentProcessor`는 SDK 인증 결과의 `authToken`, 클라이언트 키, 금액, 서명을 시크릿 키로 검증한 후 준비 금액으로 승인합니다. 응답의 `tid`, 주문번호, 금액을 저장된 정보와 대조하고, 가상계좌 `ready`는 `WAITING_FOR_PAYMENT`로 변환합니다. 프런트 테스트 화면은 NICEPAY가 `returnUrl`로 POST한 인증 결과를 Vite 개발 서버에서 받아 React 결과 화면으로 전달하며, 로그인한 브라우저가 기존 결제 API를 호출합니다. 결제 백엔드에는 `returnUrl` 수신 컨트롤러를 두지 않습니다.
+NICEPAY 요청·응답도 토스와 같은 여러 줄 콘솔 형식으로 기록하며 Basic 인증 헤더와 인증 토큰은 가립니다.
+
 ## API
 
 | 메서드 | 경로 | 역할 |
@@ -114,13 +119,14 @@ PG API 오류는 `BusinessException`을 상속한 `PaymentException`으로 전�
 | GET | `/apis/v3/payments?page=0` | 로그인한 사용자의 결제 목록, 20건씩 최신순 조회 |
 | GET | `/apis/v3/payments/{paymentId}` | 로그인한 사용자의 결제 한 건 조회 |
 
-`ready` 요청은 `provider`, `orderId`를 사용합니다. 승인 요청은 `provider`, `orderId`, `externalPaymentId`, `amount`를 사용합니다. 프런트엔드는 토스 SDK가 반환한 `paymentKey`를 승인 요청의 `externalPaymentId`로 전달합니다. 결제 응답의 `id`는 내부 결제 PK이고 `externalPaymentId`는 PG 결제 키입니다. 응답에는 `provider`, `orderId`, `amount`, `paymentStatus`, `orderStatus`도 포함되며 공통 성공 응답으로 감쌉니다.
+`ready` 요청은 `provider`, `orderId`를 사용합니다. 승인 요청은 `provider`, `orderId`, `externalPaymentId`, `amount`를 사용합니다. 프런트엔드는 토스 SDK의 `paymentKey` 또는 NICEPAY SDK 인증 결과의 `tid`를 `externalPaymentId`로 전달합니다. NICEPAY 승인에는 `clientId`, `authToken`, `signature`를 추가로 전달하며 서버에서 서명을 검증합니다. 결제 응답의 `id`는 내부 결제 PK이고 `externalPaymentId`는 PG 결제 키입니다. 응답에는 `provider`, `orderId`, `amount`, `paymentStatus`, `orderStatus`도 포함되며 공통 성공 응답으로 감쌉니다.
 
 ## 코드 구조
 
 ```text
 src/main/java/com/paymentModule/
 ├── api/toss/                         토스 RestClient, 요청·응답 DTO, 토스 enum
+├── api/nice/                         나이스페이 RestClient, 응답 DTO, 인증 서명 검증
 ├── config/                           Security, Swagger 설정
 ├── data/                             엔티티, 저장소, 공통 응답·enum
 ├── domain/user/                      회원 인증 API와 서비스
@@ -129,13 +135,13 @@ src/main/java/com/paymentModule/
 └── global/                           설정 프로퍼티, 예외 처리, 인증·쿠키 유틸리티, 재전달 스케줄러
 ```
 
-`PaymentService`는 결제 흐름을 조율하고, `PaymentTransactionService`는 결제 생성과 `writeResult()`의 상태·이력·로그 저장을 짧은 트랜잭션으로 처리합니다. `PaymentProcessor` 구현은 `PaymentProvider`를 키로 한 Bean 맵에서 선택하며, 현재 등록된 구현은 `TossPaymentProcessor`입니다.
+`PaymentService`는 결제 흐름을 조율하고, `PaymentTransactionService`는 결제 생성과 `writeResult()`의 상태·이력·로그 저장을 짧은 트랜잭션으로 처리합니다. `PaymentProcessor` 구현은 `PaymentProvider`를 키로 한 Bean 맵에서 선택하며, 현재 등록된 구현은 `TossPaymentProcessor`와 `NicePaymentProcessor`입니다.
 
-`PaymentProcessResult`는 공통 결제 상태·식별자와 PG 가맹점 ID(`merchantId`), PG 원본 상태·수단, PG 요청·승인 시각, 영수증 URL을 담습니다. 카드·계좌이체·가상계좌·간편결제·현금영수증 상세 정보는 해당 수단에서만 채웁니다. 토스 구현은 검증된 승인·조회 응답을 이 공통 결과로 변환합니다. 결제 금액과 주문번호는 Processor 입력과 PG 응답을 대조하며 결과 DTO에 중복 저장하지 않습니다. `PaymentMethodType`은 결제수단 enum, `PaymentMethod`는 현재 결제수단의 DB 상세 정보를 묶는 임베디드 클래스입니다.
+`PaymentProcessResult`는 공통 결제 상태·식별자, PG 원본 상태·수단, PG 요청·승인 시각, 영수증 URL을 담습니다. 카드·계좌이체·가상계좌·간편결제·현금영수증 상세 정보는 해당 수단에서만 채웁니다. 토스와 나이스페이 구현은 검증된 승인·조회 응답을 이 공통 결과로 변환합니다. 결제 금액과 주문번호는 Processor 입력과 PG 응답을 대조하며 결과 DTO에 중복 저장하지 않습니다. `PaymentMethodType`은 결제수단 enum, `PaymentMethod`는 현재 결제수단의 DB 상세 정보를 묶는 임베디드 클래스입니다.
 
 주요 테이블은 주문별 현재 결제 상태 한 행을 보관하는 `payment`, 상태 변경을 기록하는 `payment_history`, 실제 PG 호출 결과를 기록하는 `payment_api_log`입니다. 새로 만드는 DB에는 `orderId` 고유 제약을 적용합니다. 기존 DB에서 빠진 `externalPaymentId`·`transactionId` 컬럼은 `schema.sql`이 조건부로 추가합니다. 기존 인덱스와 고유 제약은 `CREATE TABLE IF NOT EXISTS`로 바뀌지 않으므로 중복 주문 행 확인과 별도 반영이 필요합니다.
 
-`payment`에는 현재 시도의 `merchantId`·영수증 URL과 화면에서 다시 보여줄 카드·이체·가상계좌·간편결제·현금영수증 핵심 정보를 nullable 컬럼으로 저장합니다. JPA의 `PaymentMethod` 임베디드 클래스로 이 컬럼들을 묶고, 재준비 시 이전 시도 정보를 비웁니다. 기존 DB에는 `schema.sql`이 누락된 컬럼만 조건부로 추가합니다. 결제 API는 소유자 확인 후 `paymentMethodDetails`로 저장된 안내 정보를 반환합니다. PG 호출별 API 로그에는 상세 결제수단 정보나 인증 헤더를 저장하지 않습니다.
+`payment`에는 현재 시도의 영수증 URL과 화면에서 다시 보여줄 카드·이체·가상계좌·간편결제·현금영수증 핵심 정보를 nullable 컬럼으로 저장합니다. JPA의 `PaymentMethod` 임베디드 클래스로 이 컬럼들을 묶고, 재준비 시 이전 시도 정보를 비웁니다. 기존 DB에는 `schema.sql`이 누락된 컬럼을 조건부로 추가하고, 사용하지 않는 `merchantId` 컬럼은 조건부로 제거합니다. 결제 API는 소유자 확인 후 `paymentMethodDetails`로 저장된 안내 정보를 반환합니다. PG 호출별 API 로그에는 상세 결제수단 정보나 인증 헤더를 저장하지 않습니다.
 
 `payment.id`는 내부 PK, `payment.orderId`는 주문 ID, `payment.externalPaymentId`는 PG 결제 키입니다. 이력·API 로그의 `paymentId`는 내부 결제 PK를 참조하며, PG 결제 키는 `externalPaymentId`, PG 거래 키는 `transactionId`에 저장합니다. 이력·API 로그는 각 행의 `id`만 PK로 사용하고 결제 참조값과 PG 키에는 고유 제약을 두지 않습니다.
 
@@ -144,14 +150,14 @@ src/main/java/com/paymentModule/
 ## 로컬 실행
 
 1. Java 25와 Docker 실행 환경을 준비합니다.
-2. 토스 API를 실제 호출할 경우 `src/main/resources/application.yaml`의 `payments.toss` 설정을 확인합니다. 공개 클라이언트 키는 문서용 위젯 테스트 키(`test_gck`)이며, 서버 시크릿 키는 `TOSS_SECRET_KEY` 환경변수로 전달합니다. 결제 테스트에는 같은 키 쌍의 `test_gsk`를 사용합니다.
+2. `src/main/resources/application.yaml`의 `payments.toss`·`payments.nice` 설정을 확인합니다. 토스는 문서용 위젯 테스트 키 쌍(`test_gck`/`test_gsk`), 나이스페이는 Server 승인 테스트 키와 샌드박스 API 주소를 사용합니다.
 3. 프로젝트 루트에서 `./gradlew bootRun`을 실행합니다. Windows PowerShell에서는 `.\gradlew.bat bootRun`을 사용합니다.
 
 애플리케이션 포트는 `8080`입니다. `compose.yml`에 MySQL과 Redis가 정의되어 있고 Spring Boot Docker Compose 연동이 활성화되어 있습니다. MySQL은 로컬 `3306` 포트를 사용합니다. 테이블 생성과 결제 식별자 컬럼의 조건부 보완 SQL은 `src/main/resources/sql/schema.sql`에 있습니다. Hibernate 물리적 명명 전략은 스키마의 camelCase 컬럼명을 그대로 사용하도록 설정하며, `User` 엔티티는 실제 테이블 이름 `user`를 명시합니다. 기존 테이블의 다른 컬럼·인덱스·제약 변경은 별도 반영이 필요합니다.
 
 Hibernate SQL의 `?`에 전달되는 값은 `org.hibernate.orm.jdbc.bind=TRACE`로 SQL 다음에 별도 바인딩 로그로 표시합니다. SQL 문자열 자체의 `?`가 값으로 치환되지는 않습니다.
 
-React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci`, `npm run dev`로 시작합니다. 화면은 Vite 개발 서버의 `/apis` 프록시를 통해 백엔드에 요청하므로 로그인 JWT 쿠키를 같은 출처로 전달합니다. 백엔드 `WebConfig`는 Vite의 `http://localhost:5173` 출처를 허용합니다. 로그인·회원가입, `ready`, 토스 결제위젯의 결제수단·약관 표시와 결제 요청, 성공 URL의 승인 요청, 실패 화면, 본인 결제 목록·단건 조회와 실패·결과 미확인 결제의 재시도 버튼을 제공합니다. 테스트 화면은 `frontend/.env.local`의 공개 `VITE_TOSS_CLIENT_KEY`를 직접 읽으며, 백엔드에는 짝이 맞는 `TOSS_SECRET_KEY`가 필요합니다. `frontend/.env.local`은 Git에 포함하지 않고 시크릿 키는 브라우저에 전달하지 않습니다. 이 화면은 SDK의 `widgets()`를 사용하며 주문서형 테스트 클라이언트 키(`test_gck`)와 짝이 맞는 시크릿 키(`test_gsk`)가 필요합니다.
+React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci`, `npm run dev`로 시작합니다. 화면은 Vite 개발 서버의 `/apis` 프록시를 통해 백엔드에 요청하므로 로그인 JWT 쿠키를 같은 출처로 전달합니다. 백엔드 `WebConfig`는 Vite의 `http://localhost:5173` 출처를 허용합니다. 로그인·회원가입, PG 선택 후 `ready`, 토스 결제위젯 또는 나이스페이 결제창 요청, 성공 URL의 승인 요청, 실패 화면, 본인 결제 목록·단건 조회와 재시도 버튼을 제공합니다. `frontend/.env.local`의 공개 `VITE_TOSS_CLIENT_KEY`·`VITE_NICE_CLIENT_KEY`를 읽고, PG 시크릿 키는 백엔드에만 둡니다. NICEPAY의 인증 결과 POST를 받는 `/nice/return`은 Vite 개발 서버 미들웨어로 구현되어 있으므로 이 테스트 흐름은 `npm run dev`에서 실행합니다. 정적 파일만 배포하는 환경은 이 POST를 받을 프런트 서버 경로가 별도로 필요합니다.
 
 결제 테이블의 신규 생성 구조와 확인된 구형 결제 식별자 컬럼 보완은 `src/main/resources/sql/schema.sql`을 기준으로 관리합니다.
 
@@ -161,12 +167,13 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 .\gradlew.bat test
 ```
 
-- `PaymentFlowIntegrationTest`: H2와 Spring Boot 컨텍스트로 준비·승인·실패·대기·재결제·재시도 흐름 및 가맹점·카드 상세 정보 저장을 검증하고 토스 외부 호출만 모킹합니다.
+- `PaymentFlowIntegrationTest`: H2와 Spring Boot 컨텍스트로 준비·승인·실패·대기·재결제·재시도 흐름 및 카드 상세 정보 저장을 검증하고 토스 외부 호출만 모킹합니다.
 - `PaymentSchedulerTest`: 재조회 대상과 100건이 넘는 완료 이벤트 재전달을 검증합니다.
 - `PaymentCompletedEventListenerTest`: 완료 이벤트를 받으면 `PENDING`까지만 기록하는지 확인합니다.
 - `TossPaymentProcessorTest`: 토스 응답의 결제 상태·금액·식별자와 카드·가상계좌 상세 변환을 검증합니다.
+- `NicePaymentProcessorTest`: NICEPAY 인증 서명, 승인·조회 상태, 결제 식별자·금액과 카드·가상계좌 변환을 검증합니다.
 - `TossPaymentApiTest`: 토스 API 클라이언트 호출을 다룹니다. 실제 API를 호출하는 테스트는 입력값과 키 설정을 먼저 확인해야 합니다.
-- `frontend`: `npm run build`, `npm run lint`로 React 테스트 화면의 빌드·정적 검사를 확인합니다.
+- `frontend`: `npm run build`, `npm run lint`, `node --test test/nice-return.test.js`로 빌드·정적 검사와 NICEPAY 인증 결과 POST 전달을 확인합니다.
 
 ## 사용처 연결과 현재 구현 범위
 
@@ -465,8 +472,38 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 
 1. **문제 사항:** PG 승인·조회 결과가 결제 상태와 키만 공통 결과로 전달해 카드·계좌·가상계좌 안내 정보를 호출 측에서 사용할 수 없었습니다.
 2. **원인:** 토스 응답 DTO에는 수단별 정보가 있었지만 `PaymentProcessResult` 변환에서 제외됐고, `payment` 행에도 현재 수단의 안내 필드가 없었습니다.
-3. **생각과 해결 방향:** 여러 PG가 제공하는 의미가 같은 필드는 공통 결과로 변환해 최대한 전달합니다. DB에는 고객이 다시 조회할 핵심 정보만 저장하고, 현재 결제 한 행의 nullable 컬럼을 임베디드 클래스로 묶습니다. PG 가맹점 ID와 간편결제 제공사는 별도로 구분합니다.
-4. **해결안:** 결과에 `merchantId`, PG 원본 상태·수단, 요청 시각, 영수증 URL 및 카드·계좌이체·가상계좌·간편결제·현금영수증 정보를 추가했습니다. 토스 승인·조회 변환을 연결하고, `PaymentMethod` 임베디드 클래스와 `payment` 컬럼 및 조회 응답을 추가했습니다. 기존 결제수단 enum은 `PaymentMethodType`으로 이름을 구분했습니다.
+3. **생각과 해결 방향:** 여러 PG가 제공하는 의미가 같은 필드는 공통 결과로 변환해 최대한 전달합니다. DB에는 고객이 다시 조회할 핵심 정보만 저장하고, 현재 결제 한 행의 nullable 컬럼을 임베디드 클래스로 묶습니다. 당시에는 PG 가맹점 ID도 저장 대상으로 판단했습니다.
+4. **해결안:** 결과에 당시 `merchantId`, PG 원본 상태·수단, 요청 시각, 영수증 URL 및 카드·계좌이체·가상계좌·간편결제·현금영수증 정보를 추가했습니다. 토스 승인·조회 변환을 연결하고, `PaymentMethod` 임베디드 클래스와 `payment` 컬럼 및 조회 응답을 추가했습니다. 기존 결제수단 enum은 `PaymentMethodType`으로 이름을 구분했습니다. 이후 `merchantId`는 아래 항목에서 제거했습니다.
 5. **결과:** 토스 처리기 단위 테스트와 H2 결제 흐름 통합 테스트가 통과했습니다. 실제 MySQL의 기존 테이블에 대한 `schema.sql` 적용은 별도 확인이 필요합니다.
 
 **당시 대화:** [PG 공통 결제수단 정보 설계](docs/conversations/payment-method-information.txt)
+
+### 2026-11-27 · PG 가맹점 ID 저장 제거
+
+1. **문제 사항:** 공통 결과와 `payment` 행에 가맹점 ID를 저장하지만 현재 결제 승인·조회·복구에서는 사용하지 않습니다.
+2. **원인:** 토스 응답의 `mId`와 과거 NICEPAY 방식의 MID를 공통 저장 대상으로 보았으나, 이번 NICEPAY Server 승인 방식은 클라이언트 키와 시크릿 키로 상점을 특정합니다.
+3. **생각과 해결 방향:** PG API 호출에 필요하지 않은 가맹점 ID를 결제 행마다 중복 저장하지 않습니다. 여러 가맹점 계정을 운영하게 되면 실제 승인에 사용한 설정을 구별할 방법을 별도로 설계합니다.
+4. **해결안:** `PaymentProcessResult`, `Payment`, `PaymentResponse`와 토스 변환·저장 흐름에서 `merchantId`를 제거하고, `schema.sql`은 기존 DB의 컬럼도 조건부로 삭제합니다.
+5. **결과:** 현재 결제 결과에는 PG 결제 키와 영수증·결제수단 정보만 남습니다. Java와 테스트 소스는 컴파일됐고 응답 직렬화 테스트는 통과했습니다. Mockito를 사용하는 테스트는 실행 환경의 Byte Buddy 에이전트 경로 오류로 완료하지 못했습니다. 실제 MySQL 스키마 적용 결과는 별도 확인이 필요합니다.
+
+**당시 대화:** [PG 가맹점 ID 저장 여부](docs/conversations/merchant-id-removal.txt)
+
+### 2026-11-27 · NICEPAY 테스트 키와 API 설정 준비
+
+1. **문제 사항:** NICEPAY Server 승인 방식을 연동하기 위한 테스트 키와 API 주소 설정이 없었습니다.
+2. **원인:** 현재 설정은 토스 PG만 정의하고, 프런트 설정에도 토스 공개 키만 있었습니다.
+3. **생각과 해결 방향:** 토스와 같은 `@ConfigurationProperties` 방식으로 NICEPAY 설정을 묶고, 공개 키만 프런트 설정에 둡니다. 샌드박스의 승인 POST와 조회 GET은 같은 `/v1/payments/{tid}` 경로를 사용합니다.
+4. **해결안:** `NiceApiProperties`와 `payments.nice`에 사용자가 제공한 테스트 키·샌드박스 주소·API 경로를 설정하고, 프런트 예시와 로컬 설정에 `VITE_NICE_CLIENT_KEY`를 추가했습니다.
+5. **결과:** 이 시점에는 키와 경로 설정만 준비됐습니다. 이후 아래 항목에서 NICEPAY 승인·조회와 SDK 화면을 연결했습니다.
+
+**당시 대화:** [NICEPAY 테스트 키 설정](docs/conversations/nice-test-key-configuration.txt)
+
+### 2026-11-27 · NICEPAY Server 승인 흐름 연결
+
+1. **문제 사항:** NICEPAY 테스트 키와 API 주소만 있어 `ready` 이후 결제창 인증과 서버 승인·복구를 실행할 수 없었습니다.
+2. **원인:** `PaymentProvider`에 NICE 항목과 `PaymentProcessor` 구현이 없고, React 화면도 토스 결제위젯만 호출했습니다. NICEPAY 결제창은 인증 결과를 `returnUrl`에 POST하는 방식입니다.
+3. **생각과 해결 방향:** 사용자가 정한 `ready → SDK → 기존 결제 API의 서버 검증·승인` 흐름을 유지합니다. 인증 결과는 프런트 개발 서버에서 받아 React 화면으로 전달하고, 결제 백엔드는 PG 승인 POST·조회 GET만 호출합니다.
+4. **해결안:** `NicePaymentApi`·`NicePaymentProcessor`·응답 DTO·상태 매핑·서명 검증을 추가했습니다. React에 PG 선택과 NICEPAY 결제창·결과 화면을 추가하고, Vite 개발 서버가 인증 결과 POST를 받아 결과 화면으로 전달합니다. 기존 `PaymentService.payment(request)`와 사용자 인증 흐름은 변경하지 않았습니다.
+5. **결과:** NICEPAY 처리기 단위 테스트 4건, 프런트 POST 전달 테스트 2건, Java 컴파일, Vite 빌드·lint가 통과했습니다. 사용자가 실제 NICEPAY 테스트 결제의 `SUCCESS` 응답과 저장된 카드 정보·영수증 URL을 확인했습니다. 이 결과만으로 실패·복구 흐름이나 실제 MySQL 스키마 변경까지 검증된 것은 아닙니다. 정적 프런트 배포에는 POST를 받을 프런트 서버 경로가 추가로 필요합니다.
+
+**당시 대화:** [NICEPAY 승인 흐름과 프런트 응답 수신](docs/conversations/nice-payment-flow.txt)

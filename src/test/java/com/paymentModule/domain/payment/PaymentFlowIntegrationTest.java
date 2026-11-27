@@ -173,7 +173,6 @@ class PaymentFlowIntegrationTest {
 
         TossApiResponse approved = tossResponse(orderId, "payment_success_001", READY_AMOUNT,
                 TossPaymentStatus.DONE);
-        approved.setMId("merchant_success_001");
         TossApiResponse.Card card = new TossApiResponse.Card();
         card.setIssuerCode("11");
         card.setNumber("123456******7890");
@@ -189,7 +188,6 @@ class PaymentFlowIntegrationTest {
         PaymentResponse completed = paymentController.payment(request).getData();
 
         assertEquals(PaymentStatus.SUCCESS, completed.getPaymentStatus());
-        assertEquals("merchant_success_001", completed.getMerchantId());
         assertEquals("123456******7890", completed.getPaymentMethodDetails().getCardMaskedNumber());
         assertEquals(OrderStatus.BEFORE, completed.getOrderStatus());
         Payment saved = paymentRepository.findById(ready.getId()).orElseThrow();

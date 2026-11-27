@@ -22,9 +22,9 @@ export async function loginUser({ id, password }) {
   return response.data
 }
 
-export async function readyPayment(orderId) {
+export async function readyPayment(orderId, provider = 'TOSS') {
   const response = await api.post('/payments/ready', {
-    provider: 'TOSS',
+    provider,
     orderId,
   })
   return response.data.data
@@ -35,12 +35,14 @@ export async function retryPayment(paymentId) {
   return response.data.data
 }
 
-export async function approvePayment({ paymentKey, orderId, amount }) {
+export async function approvePayment({ paymentKey, externalPaymentId, orderId, amount,
+  provider = 'TOSS', clientId, authToken, signature }) {
   const response = await api.post('/payments', {
-    provider: 'TOSS',
-    externalPaymentId: paymentKey,
+    provider,
+    externalPaymentId: externalPaymentId ?? paymentKey,
     orderId,
     amount,
+    ...(provider === 'NICE' ? { clientId, authToken, signature } : {}),
   })
   return response.data.data
 }

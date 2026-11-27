@@ -229,7 +229,6 @@ public class TossPaymentProcessor implements PaymentProcessor {
         return PaymentProcessResult.builder()
                 .apiCalls(List.of(apiCall))
                 .httpStatus(httpStatus)
-                .merchantId(response.getMId())
                 .externalPaymentId(response.getPaymentKey())
                 .transactionId(transactionKey(response))
                 .paymentMethod(paymentMethod(response.getMethod()))

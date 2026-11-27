@@ -2,6 +2,7 @@ import { Navigate, NavLink, Route, Routes } from 'react-router'
 import LoginPage from './pages/LoginPage.jsx'
 import CheckoutPage from './pages/CheckoutPage.jsx'
 import SuccessPage from './pages/SuccessPage.jsx'
+import NiceSuccessPage from './pages/NiceSuccessPage.jsx'
 import FailPage from './pages/FailPage.jsx'
 import PaymentsPage from './pages/PaymentsPage.jsx'
 import PaymentDetailPage from './pages/PaymentDetailPage.jsx'
@@ -28,6 +29,7 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/checkout" element={<CheckoutPage />} />
           <Route path="/success" element={<SuccessPage />} />
+          <Route path="/nice/success" element={<NiceSuccessPage />} />
           <Route path="/fail" element={<FailPage />} />
           <Route path="/payments" element={<PaymentsPage />} />
           <Route path="/payments/:paymentId" element={<PaymentDetailPage />} />

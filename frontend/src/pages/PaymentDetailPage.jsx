@@ -52,7 +52,7 @@ function PaymentDetailPage() {
       <h2>결제 #{paymentId}</h2>
       {message && <p role="status" className="notice">{message}</p>}
       {payment && <pre>{JSON.stringify(payment, null, 2)}</pre>}
-      {payment?.provider === 'TOSS' && ['FAILED', 'UNKNOWN'].includes(payment.paymentStatus) && (
+      {['TOSS', 'NICE'].includes(payment?.provider) && ['FAILED', 'UNKNOWN'].includes(payment.paymentStatus) && (
         <button type="button" disabled={busy} onClick={retry}>
           {busy ? '확인 중…' : payment.paymentStatus === 'UNKNOWN' ? '결과 확인 후 재결제' : '재결제'}
         </button>

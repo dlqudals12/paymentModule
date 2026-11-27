@@ -1,0 +1,6 @@
+사용자: 그러면 다시 설명해 구현 계획 어떤 api를 호출하고 설정파일은 토스랑 동일하게 구성하고
+AI: 현재 토스 구조에 NICEPAY를 추가한다면 계획은 이거야.
+
+1. 설정: TossApiProperties.java와 같은 방식으로 NiceApiProperties를 만들고, application.yaml에 payments.nice의 client-key, secret-key, base-url, path.payment를 둬. 테스트 base-url은 https://sandbox-api.nicepay.co.kr, 경로는 /v1/payments/{tid}야. POST와 GET이 같은 경로를 써서 경로 설정은 하나면 돼.
+
+사용자: 그리고 클라키랑 시크릿 키는 내가 아까 준 키들로 설정해 이미지 어차피 테스트라서 코드레벨에 올려도 괜찮아

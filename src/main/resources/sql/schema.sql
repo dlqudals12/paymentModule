@@ -20,7 +20,6 @@ CREATE TABLE IF NOT EXISTS payment (
     orderId VARCHAR(64) NOT NULL COMMENT '결제 요청과 승인에 사용하는 주문 식별자',
     activeOrderId VARCHAR(64) NULL COMMENT '승인 가능한 현재 시도의 주문 식별자. 실패 확정 시 NULL, 재준비 시 복원',
     externalPaymentId VARCHAR(255) NULL COMMENT 'PG사에서 발급한 결제 식별자. 토스의 paymentKey',
-    merchantId VARCHAR(100) NULL COMMENT 'PG 가맹점 식별자',
     receiptUrl VARCHAR(1000) NULL COMMENT '결제 영수증 주소',
     cardIssuerCode VARCHAR(30) NULL COMMENT '카드 발급사 코드',
     cardIssuerName VARCHAR(100) NULL COMMENT '카드 발급사 이름',
@@ -68,6 +67,17 @@ CREATE TABLE IF NOT EXISTS payment (
     CONSTRAINT ck_payment_cancelledAmount CHECK (cancelledAmount >= 0 AND cancelledAmount <= amount)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='결제 현재 상태 및 결제 결과 관리';
 
+-- 기존 DB에 남아 있는 미사용 가맹점 식별 컬럼도 제거한다.
+SET @payment_merchant_id_sql = IF(
+    (SELECT COUNT(*) FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'merchantId') > 0,
+    'ALTER TABLE payment DROP COLUMN merchantId',
+    'SELECT 1'
+);
+PREPARE payment_merchant_id_stmt FROM @payment_merchant_id_sql;
+EXECUTE payment_merchant_id_stmt;
+DEALLOCATE PREPARE payment_merchant_id_stmt;
+
 -- 기존 payment 테이블에는 CREATE TABLE IF NOT EXISTS가 새 컬럼을 추가하지 않으므로 누락된 PG 결제 키 컬럼을 보완한다.
 SET @payment_external_id_sql = IF(
     (SELECT COUNT(*) FROM information_schema.columns
@@ -82,9 +92,6 @@ DEALLOCATE PREPARE payment_external_id_stmt;
 -- 기존 payment 테이블에서도 누락된 상세 컬럼만 추가해 부분 반영된 DB를 안전하게 보완한다.
 SET @payment_details_sql = CONCAT(
     'ALTER TABLE payment ',
-    IF((SELECT COUNT(*) FROM information_schema.columns
-        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'merchantId') = 0,
-        'ADD COLUMN merchantId VARCHAR(100) NULL, ', ''),
     IF((SELECT COUNT(*) FROM information_schema.columns
         WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'receiptUrl') = 0,
         'ADD COLUMN receiptUrl VARCHAR(1000) NULL, ', ''),
