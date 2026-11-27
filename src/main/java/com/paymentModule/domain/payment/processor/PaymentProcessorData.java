@@ -1,7 +1,7 @@
 package com.paymentModule.domain.payment.processor;
 
 import com.paymentModule.data.enums.OrderStatus;
-import com.paymentModule.data.enums.PaymentMethod;
+import com.paymentModule.data.enums.PaymentMethodType;
 import com.paymentModule.data.enums.PaymentProvider;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.data.enums.PaymentType;
@@ -24,7 +24,7 @@ public class PaymentProcessorData {
     private final String externalPaymentId;
     private final PaymentProvider provider;
     private final PaymentType paymentType;
-    private final PaymentMethod paymentMethod;
+    private final PaymentMethodType paymentMethod;
     private final PaymentStatus paymentStatus;
     private final LocalDateTime paymentStatusChangedAt;
     private final OrderStatus orderStatus;

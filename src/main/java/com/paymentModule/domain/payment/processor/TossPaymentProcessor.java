@@ -8,7 +8,7 @@ import com.paymentModule.api.toss.dto.response.TossApiResult;
 import com.paymentModule.api.toss.enums.TossPaymentMethod;
 import com.paymentModule.api.toss.enums.TossPaymentStatus;
 import com.paymentModule.data.enums.PaymentApiType;
-import com.paymentModule.data.enums.PaymentMethod;
+import com.paymentModule.data.enums.PaymentMethodType;
 import com.paymentModule.data.enums.PaymentProvider;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.domain.payment.dto.request.PaymentReadyRequest;
@@ -128,26 +128,16 @@ public class TossPaymentProcessor implements PaymentProcessor {
 
         //토스 결제 상태에 따라 공통 결과 생성
         if (approved.getStatus() == TossPaymentStatus.DONE) {
-            return PaymentProcessResult.builder()
-                    .apiCalls(List.of(apiCall))
-                    .httpStatus(httpStatus)
+            return resultBuilder(apiCall, httpStatus, approved)
                     .status(PaymentStatus.SUCCESS)
-                    .externalPaymentId(approved.getPaymentKey())
-                    .transactionId(transactionKey(approved))
-                    .paymentMethod(paymentMethod(approved.getMethod()))
                     .approvedAt(approvedAt(approved.getApprovedAt()))
                     .build();
         }
 
         if (approved.getStatus() == TossPaymentStatus.WAITING_FOR_DEPOSIT) {
             // 입금 대기 상태는 결제 완료가 아니므로 이벤트를 발행하지 않는다.
-            return PaymentProcessResult.builder()
-                    .apiCalls(List.of(apiCall))
-                    .httpStatus(httpStatus)
+            return resultBuilder(apiCall, httpStatus, approved)
                     .status(PaymentStatus.WAITING_FOR_PAYMENT)
-                    .externalPaymentId(approved.getPaymentKey())
-                    .transactionId(transactionKey(approved))
-                    .paymentMethod(paymentMethod(approved.getMethod()))
                     .build();
         }
 
@@ -159,13 +149,8 @@ public class TossPaymentProcessor implements PaymentProcessor {
             status = PaymentStatus.UNKNOWN;
         }
 
-        return PaymentProcessResult.builder()
-                .apiCalls(List.of(apiCall))
-                .httpStatus(httpStatus)
+        return resultBuilder(apiCall, httpStatus, approved)
                 .status(status)
-                .externalPaymentId(approved.getPaymentKey())
-                .transactionId(transactionKey(approved))
-                .paymentMethod(paymentMethod(approved.getMethod()))
                 .code("TOSS_NOT_DONE")
                 .message("토스 결제가 완료 상태가 아닙니다: " + approved.getStatus())
                 .build();
@@ -228,17 +213,35 @@ public class TossPaymentProcessor implements PaymentProcessor {
             status = PaymentStatus.PROCESSING;
         }
 
-        return PaymentProcessResult.builder()
-                .apiCalls(List.of(apiCall))
-                .httpStatus(httpStatus)
+        return resultBuilder(apiCall, httpStatus, response)
                 .status(status)
-                .externalPaymentId(response.getPaymentKey())
-                .transactionId(transactionKey(response))
-                .paymentMethod(paymentMethod(response.getMethod()))
                 .approvedAt(status == PaymentStatus.SUCCESS ? approvedAt(response.getApprovedAt()) : null)
                 .code(status == PaymentStatus.SUCCESS ? null : "TOSS_LOOKUP_" + response.getStatus())
                 .message(status == PaymentStatus.SUCCESS ? null : "토스 결제 조회 상태: " + response.getStatus())
                 .build();
+    }
+
+    /**
+     * 검증된 토스 응답에서 모든 결제수단에 공통으로 전달할 결과 값을 구성한다.
+     */
+    private PaymentProcessResult.PaymentProcessResultBuilder resultBuilder(
+            PaymentApiCallResult apiCall, Integer httpStatus, TossApiResponse response) {
+        return PaymentProcessResult.builder()
+                .apiCalls(List.of(apiCall))
+                .httpStatus(httpStatus)
+                .merchantId(response.getMId())
+                .externalPaymentId(response.getPaymentKey())
+                .transactionId(transactionKey(response))
+                .paymentMethod(paymentMethod(response.getMethod()))
+                .providerStatus(response.getStatus() == null ? null : response.getStatus().name())
+                .providerMethod(providerMethod(response.getMethod()))
+                .requestedAt(pgDate(response.getRequestedAt()))
+                .receiptUrl(receiptUrl(response))
+                .card(card(response.getCard()))
+                .transfer(transfer(response.getTransfer()))
+                .virtualAccount(virtualAccount(response.getVirtualAccount()))
+                .easyPay(easyPay(response.getEasyPay()))
+                .cashReceipt(cashReceipt(response.getCashReceipt()));
     }
 
     /**
@@ -311,12 +314,110 @@ public class TossPaymentProcessor implements PaymentProcessor {
     /**
      * 결제수단 변환
      */
-    private PaymentMethod paymentMethod(TossPaymentMethod method) {
+    private PaymentMethodType paymentMethod(TossPaymentMethod method) {
         if (method == null) {
             return null;
         }
 
         return method.getPaymentMethod();
+    }
+
+    /**
+     * 공통 결제수단과 별도로 토스가 응답한 수단 값을 유지한다.
+     */
+    private String providerMethod(TossPaymentMethod method) {
+        return method == null ? null : LOG_OBJECT_MAPPER.valueToTree(method).asText();
+    }
+
+    /**
+     * 토스 카드 응답을 PG에 종속되지 않는 카드 정보로 변환한다.
+     */
+    private PaymentCardInfo card(TossApiResponse.Card source) {
+        if (source == null) {
+            return null;
+        }
+
+        return PaymentCardInfo.builder()
+                .issuerCode(source.getIssuerCode())
+                .acquirerCode(source.getAcquirerCode())
+                .maskedNumber(source.getNumber())
+                .installmentMonths(source.getInstallmentPlanMonths())
+                .approvalNumber(source.getApproveNo())
+                .interestFree(source.getIsInterestFree())
+                .cardType(source.getCardType() == null ? null : source.getCardType().name())
+                .ownerType(source.getOwnerType() == null ? null : source.getOwnerType().name())
+                .cardPointUsed(source.getUseCardPoint())
+                .build();
+    }
+
+    /**
+     * 토스 계좌이체 응답의 은행 정보를 변환한다.
+     */
+    private PaymentTransferInfo transfer(TossApiResponse.Transfer source) {
+        return source == null ? null : PaymentTransferInfo.builder()
+                .bankCode(source.getBankCode())
+                .build();
+    }
+
+    /**
+     * 토스가 발급한 가상계좌의 입금 안내 정보를 변환한다.
+     */
+    private PaymentVirtualAccountInfo virtualAccount(TossApiResponse.VirtualAccount source) {
+        if (source == null) {
+            return null;
+        }
+
+        return PaymentVirtualAccountInfo.builder()
+                .bankCode(source.getBankCode())
+                .accountNumber(source.getAccountNumber())
+                .depositorName(source.getDepositorName())
+                .dueDate(source.getDueDate())
+                .expired(source.getExpired())
+                .build();
+    }
+
+    /**
+     * 토스 간편결제 제공사와 사용 금액을 변환한다.
+     */
+    private PaymentEasyPayInfo easyPay(TossApiResponse.EasyPay source) {
+        return source == null ? null : PaymentEasyPayInfo.builder()
+                .provider(source.getProvider())
+                .amount(source.getAmount())
+                .discountAmount(source.getDiscountAmount())
+                .build();
+    }
+
+    /**
+     * 토스가 제공한 현금영수증 발급 식별 정보만 반환한다.
+     */
+    private PaymentCashReceiptInfo cashReceipt(TossApiResponse.CashReceipt source) {
+        return source == null ? null : PaymentCashReceiptInfo.builder()
+                .type(source.getType() == null ? null : source.getType().name())
+                .issueNumber(source.getIssueNumber())
+                .receiptUrl(source.getReceiptUrl())
+                .build();
+    }
+
+    /**
+     * 결제 영수증 주소가 없는 결제수단은 null로 둔다.
+     */
+    private String receiptUrl(TossApiResponse response) {
+        return response.getReceipt() == null ? null : response.getReceipt().getUrl();
+    }
+
+    /**
+     * PG 시각을 한국 시각으로 변환한다. 값이 없거나 형식을 알 수 없으면 비워 둔다.
+     */
+    private LocalDateTime pgDate(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+
+        try {
+            return OffsetDateTime.parse(value).atZoneSameInstant(ZoneId.of("Asia/Seoul")).toLocalDateTime();
+        } catch (DateTimeParseException exception) {
+            return null;
+        }
     }
 
     /**

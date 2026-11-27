@@ -19,6 +19,9 @@ public class PaymentResponse {
     @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
     private String externalPaymentId;
+    private String merchantId;
+    private String receiptUrl;
+    private PaymentMethodResponse paymentMethodDetails;
     private PaymentProvider provider;
     private String orderId;
     private Long amount;
@@ -32,6 +35,9 @@ public class PaymentResponse {
         return PaymentResponse.builder()
                 .id(payment.getId())
                 .externalPaymentId(payment.getExternalPaymentId())
+                .merchantId(payment.getMerchantId())
+                .receiptUrl(payment.getReceiptUrl())
+                .paymentMethodDetails(PaymentMethodResponse.of(payment.getPaymentMethodDetails()))
                 .provider(payment.getProvider())
                 .orderId(payment.getOrderId())
                 .amount(payment.getAmount())

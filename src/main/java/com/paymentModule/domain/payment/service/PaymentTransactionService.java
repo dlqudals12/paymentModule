@@ -3,6 +3,7 @@ package com.paymentModule.domain.payment.service;
 import com.paymentModule.data.dto.user.CustomUserDetail;
 import com.paymentModule.data.enums.*;
 import com.paymentModule.data.model.entity.payment.Payment;
+import com.paymentModule.data.model.entity.payment.PaymentMethod;
 import com.paymentModule.data.model.entity.payment.PaymentApiLog;
 import com.paymentModule.data.model.entity.payment.PaymentHistory;
 import com.paymentModule.data.repository.payment.PaymentApiLogRepository;
@@ -218,6 +219,7 @@ public class PaymentTransactionService {
                 && result.getStatus() == PaymentStatus.SUCCESS
                 && Objects.equals(current.getExternalPaymentId(), result.getExternalPaymentId())) {
             //다른 요청이 같은 결제 키의 성공을 먼저 확정했다면 이력은 중복 생성하지 않는다.
+            current.updateDetails(result.getMerchantId(), result.getReceiptUrl(), paymentMethodDetails(result));
             saveApiLog(current, result, apiType, requestedAt, durationMs, exception);
             return PaymentResponse.of(current);
         }
@@ -263,11 +265,62 @@ public class PaymentTransactionService {
                     previousStatus, result.getCode(), result.getMessage(), result.getTransactionId());
         }
 
+        //상태가 같은 입금 대기 재조회에서도 새로 확인한 계좌 안내 정보를 저장한다.
+        if (result.getStatus() == PaymentStatus.SUCCESS
+                || result.getStatus() == PaymentStatus.WAITING_FOR_PAYMENT) {
+            current.updateDetails(result.getMerchantId(), result.getReceiptUrl(), paymentMethodDetails(result));
+        }
+
         //조회 결과가 불확실한 경우에도 실제 PG 통신 기록은 남긴다.
         saveApiLog(current, result, apiType, requestedAt, durationMs, exception);
 
         //상태 변경 여부와 관계없이 잠금 안에서 확인한 최신 결제를 응답으로 만든다.
         return PaymentResponse.of(current);
+    }
+
+    /**
+     * PG 공통 결과에서 재조회 화면에 필요한 결제수단 정보만 추린다.
+     */
+    private PaymentMethod paymentMethodDetails(PaymentProcessResult result) {
+        if (result.getCard() == null && result.getTransfer() == null
+                && result.getVirtualAccount() == null && result.getEasyPay() == null
+                && result.getCashReceipt() == null) {
+            return null;
+        }
+
+        var builder = PaymentMethod.builder();
+
+        if (result.getCard() != null) {
+            builder.cardIssuerCode(result.getCard().getIssuerCode())
+                    .cardIssuerName(result.getCard().getIssuerName())
+                    .cardMaskedNumber(result.getCard().getMaskedNumber())
+                    .cardInstallmentMonths(result.getCard().getInstallmentMonths())
+                    .cardApprovalNumber(result.getCard().getApprovalNumber());
+        }
+
+        if (result.getTransfer() != null) {
+            builder.transferBankCode(result.getTransfer().getBankCode())
+                    .transferBankName(result.getTransfer().getBankName());
+        }
+
+        if (result.getVirtualAccount() != null) {
+            builder.virtualAccountBankCode(result.getVirtualAccount().getBankCode())
+                    .virtualAccountBankName(result.getVirtualAccount().getBankName())
+                    .virtualAccountNumber(result.getVirtualAccount().getAccountNumber())
+                    .virtualAccountDepositorName(result.getVirtualAccount().getDepositorName())
+                    .virtualAccountDueDate(result.getVirtualAccount().getDueDate());
+        }
+
+        if (result.getEasyPay() != null) {
+            builder.easyPayProvider(result.getEasyPay().getProvider());
+        }
+
+        if (result.getCashReceipt() != null) {
+            builder.cashReceiptIssueNumber(result.getCashReceipt().getIssueNumber())
+                    .cashReceiptUrl(result.getCashReceipt().getReceiptUrl());
+        }
+
+        return builder.build();
     }
 
     /**

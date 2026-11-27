@@ -1,7 +1,7 @@
 package com.paymentModule.api.toss.enums;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.paymentModule.data.enums.PaymentMethod;
+import com.paymentModule.data.enums.PaymentMethodType;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
@@ -12,15 +12,15 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public enum TossPaymentMethod {
     @JsonProperty("카드")
-    CARD(PaymentMethod.CARD),
+    CARD(PaymentMethodType.CARD),
     @JsonProperty("가상계좌")
-    VIRTUAL_ACCOUNT(PaymentMethod.VIRTUAL_ACCOUNT),
+    VIRTUAL_ACCOUNT(PaymentMethodType.VIRTUAL_ACCOUNT),
     @JsonProperty("간편결제")
-    EASY_PAY(null),
+    EASY_PAY(PaymentMethodType.EASY_PAY),
     @JsonProperty("휴대폰")
     MOBILE_PHONE(null),
     @JsonProperty("계좌이체")
-    TRANSFER(PaymentMethod.TRANSFER),
+    TRANSFER(PaymentMethodType.TRANSFER),
     @JsonProperty("문화상품권")
     CULTURE_GIFT_CERTIFICATE(null),
     @JsonProperty("도서문화상품권")
@@ -29,5 +29,5 @@ public enum TossPaymentMethod {
     GAME_CULTURE_GIFT_CERTIFICATE(null);
 
     /** 공통 결제수단이 아직 없는 토스 수단은 null이다. */
-    private final PaymentMethod paymentMethod;
+    private final PaymentMethodType paymentMethod;
 }

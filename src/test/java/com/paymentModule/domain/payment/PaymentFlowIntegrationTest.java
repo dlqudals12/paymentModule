@@ -173,6 +173,11 @@ class PaymentFlowIntegrationTest {
 
         TossApiResponse approved = tossResponse(orderId, "payment_success_001", READY_AMOUNT,
                 TossPaymentStatus.DONE);
+        approved.setMId("merchant_success_001");
+        TossApiResponse.Card card = new TossApiResponse.Card();
+        card.setIssuerCode("11");
+        card.setNumber("123456******7890");
+        approved.setCard(card);
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenAnswer(invocation -> {
                     //외부 PG 호출 중에는 DB 트랜잭션을 유지하지 않는다.
@@ -184,9 +189,12 @@ class PaymentFlowIntegrationTest {
         PaymentResponse completed = paymentController.payment(request).getData();
 
         assertEquals(PaymentStatus.SUCCESS, completed.getPaymentStatus());
+        assertEquals("merchant_success_001", completed.getMerchantId());
+        assertEquals("123456******7890", completed.getPaymentMethodDetails().getCardMaskedNumber());
         assertEquals(OrderStatus.BEFORE, completed.getOrderStatus());
         Payment saved = paymentRepository.findById(ready.getId()).orElseThrow();
         assertEquals("payment_success_001", saved.getExternalPaymentId());
+        assertEquals("11", saved.getPaymentMethodDetails().getCardIssuerCode());
         assertNotNull(saved.getApprovedAt());
         assertFalse(saved.getPaymentStatusChangedAt().isBefore(prepared.getPaymentStatusChangedAt()));
         assertEquals(0, paymentRepository.findOrderRetryCandidates(
@@ -520,6 +528,12 @@ class PaymentFlowIntegrationTest {
         PaymentResponse ready = paymentController.ready(readyRequest("order_pending_001")).getData();
         TossApiResponse waiting = tossResponse("order_pending_001", "payment_pending_001", READY_AMOUNT,
                 TossPaymentStatus.WAITING_FOR_DEPOSIT);
+        waiting.setMethod(TossPaymentMethod.VIRTUAL_ACCOUNT);
+        TossApiResponse.VirtualAccount account = new TossApiResponse.VirtualAccount();
+        account.setBankCode("20");
+        account.setAccountNumber("123456789012");
+        account.setDueDate("2026-11-28T23:59:59+09:00");
+        waiting.setVirtualAccount(account);
         when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
                 .thenReturn(TossApiResult.success(200, waiting));
 
@@ -527,6 +541,7 @@ class PaymentFlowIntegrationTest {
                 paymentRequest("order_pending_001", "payment_pending_001", READY_AMOUNT)).getData();
 
         assertEquals(PaymentStatus.WAITING_FOR_PAYMENT, result.getPaymentStatus());
+        assertEquals("123456789012", result.getPaymentMethodDetails().getVirtualAccountNumber());
         assertEquals(PaymentStatus.WAITING_FOR_PAYMENT,
                 paymentRepository.findById(ready.getId()).orElseThrow().getPaymentStatus());
         assertTrue(paymentHistoryRepository.findAll().stream()
@@ -612,7 +627,15 @@ class PaymentFlowIntegrationTest {
         TossApiResponse waiting = tossResponse(orderId, paymentKey, READY_AMOUNT,
                 TossPaymentStatus.WAITING_FOR_DEPOSIT);
         waiting.setMethod(TossPaymentMethod.VIRTUAL_ACCOUNT);
-        when(tossPaymentApi.paymentByKey(paymentKey)).thenReturn(TossApiResult.success(200, waiting));
+        TossApiResponse.VirtualAccount account = new TossApiResponse.VirtualAccount();
+        account.setAccountNumber("123456789012");
+        waiting.setVirtualAccount(account);
+
+        TossApiResponse repeated = tossResponse(orderId, paymentKey, READY_AMOUNT,
+                TossPaymentStatus.WAITING_FOR_DEPOSIT);
+        repeated.setMethod(TossPaymentMethod.VIRTUAL_ACCOUNT);
+        when(tossPaymentApi.paymentByKey(paymentKey))
+                .thenReturn(TossApiResult.success(200, waiting), TossApiResult.success(200, repeated));
 
         SecurityContextHolder.clearContext();
         paymentService.recover(processing);
@@ -620,6 +643,8 @@ class PaymentFlowIntegrationTest {
 
         assertEquals(PaymentStatus.WAITING_FOR_PAYMENT,
                 paymentRepository.findById(ready.getId()).orElseThrow().getPaymentStatus());
+        assertEquals("123456789012", paymentRepository.findById(ready.getId()).orElseThrow()
+                .getPaymentMethodDetails().getVirtualAccountNumber());
         assertEquals(3, paymentHistoryRepository.count());
         assertEquals(2, paymentApiLogRepository.count());
         assertEquals(0, applicationEvents.stream(PaymentCompletedEvent.class).count());

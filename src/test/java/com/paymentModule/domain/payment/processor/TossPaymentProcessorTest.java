@@ -6,7 +6,7 @@ import com.paymentModule.api.toss.dto.response.TossApiResponse;
 import com.paymentModule.api.toss.dto.response.TossApiResult;
 import com.paymentModule.api.toss.enums.TossPaymentMethod;
 import com.paymentModule.api.toss.enums.TossPaymentStatus;
-import com.paymentModule.data.enums.PaymentMethod;
+import com.paymentModule.data.enums.PaymentMethodType;
 import com.paymentModule.data.enums.PaymentStatus;
 import com.paymentModule.domain.payment.dto.request.PaymentRequest;
 import com.paymentModule.global.exception.PaymentException;
@@ -56,10 +56,103 @@ class TossPaymentProcessorTest {
                 result.getApiCalls().getFirst().getRequestBody());
         assertTrue(result.getApiCalls().getFirst().getResponseBody().contains("\"status\":\"DONE\""));
         assertFalse(result.getApiCalls().getFirst().getResponseBody().contains("paymentKey"));
-        assertEquals(PaymentMethod.CARD, result.getPaymentMethod());
+        assertEquals(PaymentMethodType.CARD, result.getPaymentMethod());
         assertEquals("payment_unit_001", result.getExternalPaymentId());
         assertEquals("transaction_payment_unit_001", result.getTransactionId());
         assertEquals(200, result.getHttpStatus());
+    }
+
+    /**
+     * 승인 응답의 가맹점과 카드 상세 정보를 공통 결과로 전달한다.
+     */
+    @Test
+    void confirmedPaymentIncludesCardDetails() {
+        TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
+        TossApiResponse approved = response("order_card_001", "payment_card_001", 1500L,
+                TossPaymentStatus.DONE);
+        approved.setMId("merchant_test_001");
+        approved.setRequestedAt("2026-11-27T09:30:00+09:00");
+
+        TossApiResponse.Card card = new TossApiResponse.Card();
+        card.setIssuerCode("11");
+        card.setNumber("123456******7890");
+        card.setInstallmentPlanMonths(3);
+        card.setApproveNo("12345678");
+        approved.setCard(card);
+
+        TossApiResponse.UrlInfo receipt = new TossApiResponse.UrlInfo();
+        receipt.setUrl("https://example.com/receipt");
+        approved.setReceipt(receipt);
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.success(200, approved));
+
+        PaymentProcessResult result = processor(tossPaymentApi).payment(
+                paymentData("order_card_001", 1500L),
+                request("order_card_001", "payment_card_001", 1500L));
+
+        assertEquals("merchant_test_001", result.getMerchantId());
+        assertEquals("DONE", result.getProviderStatus());
+        assertEquals("https://example.com/receipt", result.getReceiptUrl());
+        assertEquals("11", result.getCard().getIssuerCode());
+        assertEquals("123456******7890", result.getCard().getMaskedNumber());
+        assertEquals(3, result.getCard().getInstallmentMonths());
+        assertNull(result.getVirtualAccount());
+    }
+
+    /**
+     * 입금 대기 응답의 가상계좌를 결제 성공으로 바꾸지 않고 전달한다.
+     */
+    @Test
+    void waitingPaymentIncludesVirtualAccount() {
+        TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
+        TossApiResponse approved = response("order_virtual_001", "payment_virtual_001", 1500L,
+                TossPaymentStatus.WAITING_FOR_DEPOSIT);
+        approved.setMethod(TossPaymentMethod.VIRTUAL_ACCOUNT);
+
+        TossApiResponse.VirtualAccount account = new TossApiResponse.VirtualAccount();
+        account.setBankCode("20");
+        account.setAccountNumber("123456789012");
+        account.setDueDate("2026-11-28T23:59:59+09:00");
+        approved.setVirtualAccount(account);
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.success(200, approved));
+
+        PaymentProcessResult result = processor(tossPaymentApi).payment(
+                paymentData("order_virtual_001", 1500L),
+                request("order_virtual_001", "payment_virtual_001", 1500L));
+
+        assertEquals(PaymentStatus.WAITING_FOR_PAYMENT, result.getStatus());
+        assertEquals("20", result.getVirtualAccount().getBankCode());
+        assertEquals("123456789012", result.getVirtualAccount().getAccountNumber());
+        assertEquals("2026-11-28T23:59:59+09:00", result.getVirtualAccount().getDueDate());
+        assertNull(result.getCard());
+    }
+
+    /**
+     * 간편결제에서도 PG 가맹점 ID와 간편결제 제공사를 각각 유지한다.
+     */
+    @Test
+    void easyPayKeepsMerchantAndProvider() {
+        TossPaymentApi tossPaymentApi = mock(TossPaymentApi.class);
+        TossApiResponse approved = response("order_easy_001", "payment_easy_001", 1500L,
+                TossPaymentStatus.DONE);
+        approved.setMId("merchant_easy_001");
+        approved.setMethod(TossPaymentMethod.EASY_PAY);
+
+        TossApiResponse.EasyPay easyPay = new TossApiResponse.EasyPay();
+        easyPay.setProvider("TOSSPAY");
+        easyPay.setAmount(1500L);
+        approved.setEasyPay(easyPay);
+        when(tossPaymentApi.confirm(any(TossConfirmRequest.class), anyString()))
+                .thenReturn(TossApiResult.success(200, approved));
+
+        PaymentProcessResult result = processor(tossPaymentApi).payment(
+                paymentData("order_easy_001", 1500L),
+                request("order_easy_001", "payment_easy_001", 1500L));
+
+        assertEquals(PaymentMethodType.EASY_PAY, result.getPaymentMethod());
+        assertEquals("merchant_easy_001", result.getMerchantId());
+        assertEquals("TOSSPAY", result.getEasyPay().getProvider());
     }
 
     /**

@@ -20,6 +20,23 @@ CREATE TABLE IF NOT EXISTS payment (
     orderId VARCHAR(64) NOT NULL COMMENT '결제 요청과 승인에 사용하는 주문 식별자',
     activeOrderId VARCHAR(64) NULL COMMENT '승인 가능한 현재 시도의 주문 식별자. 실패 확정 시 NULL, 재준비 시 복원',
     externalPaymentId VARCHAR(255) NULL COMMENT 'PG사에서 발급한 결제 식별자. 토스의 paymentKey',
+    merchantId VARCHAR(100) NULL COMMENT 'PG 가맹점 식별자',
+    receiptUrl VARCHAR(1000) NULL COMMENT '결제 영수증 주소',
+    cardIssuerCode VARCHAR(30) NULL COMMENT '카드 발급사 코드',
+    cardIssuerName VARCHAR(100) NULL COMMENT '카드 발급사 이름',
+    cardMaskedNumber VARCHAR(30) NULL COMMENT 'PG가 마스킹한 카드번호',
+    cardInstallmentMonths INT NULL COMMENT '카드 할부 개월 수',
+    cardApprovalNumber VARCHAR(50) NULL COMMENT '카드 승인번호',
+    transferBankCode VARCHAR(30) NULL COMMENT '계좌이체 은행 코드',
+    transferBankName VARCHAR(100) NULL COMMENT '계좌이체 은행 이름',
+    virtualAccountBankCode VARCHAR(30) NULL COMMENT '가상계좌 은행 코드',
+    virtualAccountBankName VARCHAR(100) NULL COMMENT '가상계좌 은행 이름',
+    virtualAccountNumber VARCHAR(100) NULL COMMENT '입금용 가상계좌 번호',
+    virtualAccountDepositorName VARCHAR(100) NULL COMMENT '가상계좌 입금자 안내명',
+    virtualAccountDueDate VARCHAR(50) NULL COMMENT '가상계좌 입금 기한',
+    easyPayProvider VARCHAR(100) NULL COMMENT '간편결제 제공사',
+    cashReceiptIssueNumber VARCHAR(100) NULL COMMENT '현금영수증 발급번호',
+    cashReceiptUrl VARCHAR(1000) NULL COMMENT '현금영수증 주소',
     provider VARCHAR(30) NOT NULL COMMENT '결제대행사 구분값: TOSS, KCP, PORTONE 등',
     paymentType VARCHAR(30) NOT NULL COMMENT '결제 유형: ONE_TIME, SUBSCRIPTION',
     paymentMethod VARCHAR(30) NULL COMMENT '결제 수단: CARD, TRANSFER, VIRTUAL_ACCOUNT 등',
@@ -61,6 +78,70 @@ SET @payment_external_id_sql = IF(
 PREPARE payment_external_id_stmt FROM @payment_external_id_sql;
 EXECUTE payment_external_id_stmt;
 DEALLOCATE PREPARE payment_external_id_stmt;
+
+-- 기존 payment 테이블에서도 누락된 상세 컬럼만 추가해 부분 반영된 DB를 안전하게 보완한다.
+SET @payment_details_sql = CONCAT(
+    'ALTER TABLE payment ',
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'merchantId') = 0,
+        'ADD COLUMN merchantId VARCHAR(100) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'receiptUrl') = 0,
+        'ADD COLUMN receiptUrl VARCHAR(1000) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'cardIssuerCode') = 0,
+        'ADD COLUMN cardIssuerCode VARCHAR(30) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'cardIssuerName') = 0,
+        'ADD COLUMN cardIssuerName VARCHAR(100) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'cardMaskedNumber') = 0,
+        'ADD COLUMN cardMaskedNumber VARCHAR(30) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'cardInstallmentMonths') = 0,
+        'ADD COLUMN cardInstallmentMonths INT NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'cardApprovalNumber') = 0,
+        'ADD COLUMN cardApprovalNumber VARCHAR(50) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'transferBankCode') = 0,
+        'ADD COLUMN transferBankCode VARCHAR(30) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'transferBankName') = 0,
+        'ADD COLUMN transferBankName VARCHAR(100) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'virtualAccountBankCode') = 0,
+        'ADD COLUMN virtualAccountBankCode VARCHAR(30) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'virtualAccountBankName') = 0,
+        'ADD COLUMN virtualAccountBankName VARCHAR(100) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'virtualAccountNumber') = 0,
+        'ADD COLUMN virtualAccountNumber VARCHAR(100) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'virtualAccountDepositorName') = 0,
+        'ADD COLUMN virtualAccountDepositorName VARCHAR(100) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'virtualAccountDueDate') = 0,
+        'ADD COLUMN virtualAccountDueDate VARCHAR(50) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'easyPayProvider') = 0,
+        'ADD COLUMN easyPayProvider VARCHAR(100) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'cashReceiptIssueNumber') = 0,
+        'ADD COLUMN cashReceiptIssueNumber VARCHAR(100) NULL, ', ''),
+    IF((SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'payment' AND column_name = 'cashReceiptUrl') = 0,
+        'ADD COLUMN cashReceiptUrl VARCHAR(1000) NULL, ', '')
+);
+SET @payment_details_sql = IF(
+    @payment_details_sql = 'ALTER TABLE payment ',
+    'SELECT 1',
+    LEFT(@payment_details_sql, LENGTH(@payment_details_sql) - 2)
+);
+PREPARE payment_details_stmt FROM @payment_details_sql;
+EXECUTE payment_details_stmt;
+DEALLOCATE PREPARE payment_details_stmt;
 
 CREATE TABLE IF NOT EXISTS payment_history (
                                               id BIGINT NOT NULL COMMENT '결제 이력 PK',

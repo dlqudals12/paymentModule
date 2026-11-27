@@ -131,7 +131,11 @@ src/main/java/com/paymentModule/
 
 `PaymentService`는 결제 흐름을 조율하고, `PaymentTransactionService`는 결제 생성과 `writeResult()`의 상태·이력·로그 저장을 짧은 트랜잭션으로 처리합니다. `PaymentProcessor` 구현은 `PaymentProvider`를 키로 한 Bean 맵에서 선택하며, 현재 등록된 구현은 `TossPaymentProcessor`입니다.
 
+`PaymentProcessResult`는 공통 결제 상태·식별자와 PG 가맹점 ID(`merchantId`), PG 원본 상태·수단, PG 요청·승인 시각, 영수증 URL을 담습니다. 카드·계좌이체·가상계좌·간편결제·현금영수증 상세 정보는 해당 수단에서만 채웁니다. 토스 구현은 검증된 승인·조회 응답을 이 공통 결과로 변환합니다. 결제 금액과 주문번호는 Processor 입력과 PG 응답을 대조하며 결과 DTO에 중복 저장하지 않습니다. `PaymentMethodType`은 결제수단 enum, `PaymentMethod`는 현재 결제수단의 DB 상세 정보를 묶는 임베디드 클래스입니다.
+
 주요 테이블은 주문별 현재 결제 상태 한 행을 보관하는 `payment`, 상태 변경을 기록하는 `payment_history`, 실제 PG 호출 결과를 기록하는 `payment_api_log`입니다. 새로 만드는 DB에는 `orderId` 고유 제약을 적용합니다. 기존 DB에서 빠진 `externalPaymentId`·`transactionId` 컬럼은 `schema.sql`이 조건부로 추가합니다. 기존 인덱스와 고유 제약은 `CREATE TABLE IF NOT EXISTS`로 바뀌지 않으므로 중복 주문 행 확인과 별도 반영이 필요합니다.
+
+`payment`에는 현재 시도의 `merchantId`·영수증 URL과 화면에서 다시 보여줄 카드·이체·가상계좌·간편결제·현금영수증 핵심 정보를 nullable 컬럼으로 저장합니다. JPA의 `PaymentMethod` 임베디드 클래스로 이 컬럼들을 묶고, 재준비 시 이전 시도 정보를 비웁니다. 기존 DB에는 `schema.sql`이 누락된 컬럼만 조건부로 추가합니다. 결제 API는 소유자 확인 후 `paymentMethodDetails`로 저장된 안내 정보를 반환합니다. PG 호출별 API 로그에는 상세 결제수단 정보나 인증 헤더를 저장하지 않습니다.
 
 `payment.id`는 내부 PK, `payment.orderId`는 주문 ID, `payment.externalPaymentId`는 PG 결제 키입니다. 이력·API 로그의 `paymentId`는 내부 결제 PK를 참조하며, PG 결제 키는 `externalPaymentId`, PG 거래 키는 `transactionId`에 저장합니다. 이력·API 로그는 각 행의 `id`만 PK로 사용하고 결제 참조값과 PG 키에는 고유 제약을 두지 않습니다.
 
@@ -157,10 +161,10 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 .\gradlew.bat test
 ```
 
-- `PaymentFlowIntegrationTest`: H2와 Spring Boot 컨텍스트로 준비·승인·실패·대기·재결제·재시도 흐름을 검증하고 토스 외부 호출만 모킹합니다.
+- `PaymentFlowIntegrationTest`: H2와 Spring Boot 컨텍스트로 준비·승인·실패·대기·재결제·재시도 흐름 및 가맹점·카드 상세 정보 저장을 검증하고 토스 외부 호출만 모킹합니다.
 - `PaymentSchedulerTest`: 재조회 대상과 100건이 넘는 완료 이벤트 재전달을 검증합니다.
 - `PaymentCompletedEventListenerTest`: 완료 이벤트를 받으면 `PENDING`까지만 기록하는지 확인합니다.
-- `TossPaymentProcessorTest`: 토스 응답의 결제 상태·금액·식별자 변환을 검증합니다.
+- `TossPaymentProcessorTest`: 토스 응답의 결제 상태·금액·식별자와 카드·가상계좌 상세 변환을 검증합니다.
 - `TossPaymentApiTest`: 토스 API 클라이언트 호출을 다룹니다. 실제 API를 호출하는 테스트는 입력값과 키 설정을 먼저 확인해야 합니다.
 - `frontend`: `npm run build`, `npm run lint`로 React 테스트 화면의 빌드·정적 검사를 확인합니다.
 
@@ -456,3 +460,13 @@ React 테스트 화면은 백엔드를 실행한 다음 `frontend`에서 `npm ci
 **당시 대화:** [큰 결제 ID 조회 오류](docs/conversations/large-payment-id-lookup.txt)
 
 결제 상태 복구와 완료 이벤트 재전달은 `PaymentScheduler`와 `schedule.payments` 설정 아래에 모았습니다. 처리량에 따른 배치 크기나 실행 분산은 실제 호출량을 본 뒤 결정하기로 했습니다.
+
+### 2026-11-27 · PG 공통 결제수단 정보와 현재 결제 상세 저장
+
+1. **문제 사항:** PG 승인·조회 결과가 결제 상태와 키만 공통 결과로 전달해 카드·계좌·가상계좌 안내 정보를 호출 측에서 사용할 수 없었습니다.
+2. **원인:** 토스 응답 DTO에는 수단별 정보가 있었지만 `PaymentProcessResult` 변환에서 제외됐고, `payment` 행에도 현재 수단의 안내 필드가 없었습니다.
+3. **생각과 해결 방향:** 여러 PG가 제공하는 의미가 같은 필드는 공통 결과로 변환해 최대한 전달합니다. DB에는 고객이 다시 조회할 핵심 정보만 저장하고, 현재 결제 한 행의 nullable 컬럼을 임베디드 클래스로 묶습니다. PG 가맹점 ID와 간편결제 제공사는 별도로 구분합니다.
+4. **해결안:** 결과에 `merchantId`, PG 원본 상태·수단, 요청 시각, 영수증 URL 및 카드·계좌이체·가상계좌·간편결제·현금영수증 정보를 추가했습니다. 토스 승인·조회 변환을 연결하고, `PaymentMethod` 임베디드 클래스와 `payment` 컬럼 및 조회 응답을 추가했습니다. 기존 결제수단 enum은 `PaymentMethodType`으로 이름을 구분했습니다.
+5. **결과:** 토스 처리기 단위 테스트와 H2 결제 흐름 통합 테스트가 통과했습니다. 실제 MySQL의 기존 테이블에 대한 `schema.sql` 적용은 별도 확인이 필요합니다.
+
+**당시 대화:** [PG 공통 결제수단 정보 설계](docs/conversations/payment-method-information.txt)
